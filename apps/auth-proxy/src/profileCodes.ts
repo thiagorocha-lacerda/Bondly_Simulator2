@@ -1,4 +1,9 @@
 /**
+ * @deprecated FLUXO LEGADO de código de perfil compartilhado — mantido só por compatibilidade atrás de
+ * `LEGACY_PROFILE_CODES=true` (default FALSE). O brief do sponsor proíbe código/senha compartilhado como
+ * substituto de Google OAuth + RBAC: o perfil agora vem de atribuição INDIVIDUAL por usuário (domain.ts).
+ * Este caminho NUNCA concede `approver` e nunca habilita a gestão de atribuições.
+ *
  * Segundo fator por perfil (prompt §7.2 / §7.3).
  *
  * Um código de desbloqueio por papel ELEVA a sessão (já autenticada por Google) ao papel. NÃO
@@ -65,10 +70,11 @@ export const scryptHasher: PasswordHasher = {
  * Catálogo de códigos por papel: mapa papel → hash. Carregado do ambiente/arquivo seguro, nunca do
  * bundle. Um papel sem hash configurado é INATINGÍVEL pelo 2º fator (deny-by-default).
  */
-export type ProfileCodeHashes = Partial<Record<Role, string>>;
+export type LegacyUnlockRole = Exclude<Role, 'approver'>;
+export type ProfileCodeHashes = Partial<Record<LegacyUnlockRole, string>>;
 
 export type UnlockResult =
-  | { readonly ok: true; readonly role: Role }
+  | { readonly ok: true; readonly role: LegacyUnlockRole }
   | { readonly ok: false; readonly reason: 'unknown_role' | 'not_configured' | 'bad_code' };
 
 /**

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { Role } from './roles';
 
 /**
  * Identidade da sessão atual, lida do BFF em /api/me (§6). O frontend NÃO decide autorização —
@@ -11,8 +12,13 @@ export interface SessionUser {
   readonly name: string | null;
   readonly picture: string | null;
   readonly domain: string;
-  /** Papel elevado pelo 2º fator (§7.2); null = Google ok mas sem perfil desbloqueado. */
-  readonly role: 'business' | 'tech' | 'admin' | null;
+  /** Perfil atribuído individualmente pelo admin (resolvido no servidor); null = autenticado sem perfil. */
+  readonly role: Role | null;
+  readonly roleLabel?: string | null;
+  /** Ações permitidas ao perfil (para a UI refletir; o servidor continua sendo a fronteira). */
+  readonly permissions?: readonly string[];
+  /** true só se o servidor mantém o fluxo LEGADO (DEPRECATED) de código de perfil. */
+  readonly legacyProfileCodes?: boolean;
 }
 
 export interface UseSession {

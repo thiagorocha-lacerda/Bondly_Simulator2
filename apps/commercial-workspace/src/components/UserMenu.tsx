@@ -20,6 +20,7 @@ export function UserMenu(props: { user: SessionUser | null }) {
       <span className="userinfo">
         <span className="username" title={user.email}>{label}</span>
         <span className="useremail">{user.email}</span>
+        {user.roleLabel && <span className="useremail">{user.roleLabel}</span>}
       </span>
       <a className="logoutbtn" href="/auth/logout" title="Encerrar a sessão neste aplicativo">Sair</a>
     </div>

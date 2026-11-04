@@ -7,7 +7,9 @@ import type { ServerConfig } from './config.js';
 import type { SessionData } from './session.js';
 import type { Role } from './rbac.js';
 
-const cfg = { profileCodeHashes: {} } as unknown as ServerConfig;
+// Modo LEGADO (LEGACY_PROFILE_CODES=true) só para que estes testes de lógica de endpoint sigam usando o papel na sessão.
+// A resolução real por atribuição individual (default) é coberta em rbacApi.test.ts.
+const cfg = { legacyProfileCodes: true, profileCodeHashes: {} } as unknown as ServerConfig;
 function sess(role?: Role): SessionData {
   return { email: role === 'tech' ? 'tec@minu.co' : 'ana@minu.co', domain: 'minu.co', exp: Math.floor(Date.now() / 1000) + 3600, ...(role ? { role } : {}) };
 }

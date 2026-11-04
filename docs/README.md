@@ -12,6 +12,11 @@
 | [06 — Design System, PDF e persistência](./06-design-system-pdf-persistencia.md) | Tokens/temas/AA, gerador de PDF, Cenário A/B | 23.10, 23.11, 23.12 |
 | [07 — Checklist de homologação](./07-checklist-homologacao.md) | Testes na URL de produção | §27.8 |
 | [08 — Arquitetura e roadmap](./08-arquitetura-e-roadmap.md) | Arquitetura geral/motor/workspace, evolução | 23.1, 23.2, 23.3, 23.16 |
+| [09 — Autenticação e segurança](./09-autenticacao-e-seguranca.md) | Google OAuth/PKCE, domínio, sessão, 2º fator, segurança | operacional |
+| [10 — RBAC, esteira e persistência](./10-rbac-esteira-persistencia.md) | Perfis, esteira Negócios→P&T, persistência | operacional |
+| [11 — SLA técnico](./11-sla-tecnico.md) | SLA de 5 dias úteis e reunião técnica | operacional |
+| [12 — Auditoria de completude e deploy AWS](./12-auditoria-completude-deploy-aws.md) | Checklist de lacunas, evidências, env vars | operacional |
+| [13 — Deploy manual na AWS](./13-deploy-aws-manual.md) | Runbook: build, env, TLS, persistência SQLite, smoke, rollback, backup | operacional |
 
 Documentação de testes (23.13) em `packages/pricing-engine/README.md`.
 
@@ -33,3 +38,5 @@ Documentação de testes (23.13) em `packages/pricing-engine/README.md`.
 14. Instruções de execução — doc 02 ✅
 15. Limitações — doc 02 + doc 06 ✅
 16. Roadmap de evolução — doc 08 ✅
+
+> **`render.preview.yaml`**: arquivo SOMENTE da Render (Static Site com senha cosmética, `VITE_PREVIEW_PASSWORD` vai no bundle). **NÃO usar na AWS.** Para a AWS, ver doc 13.

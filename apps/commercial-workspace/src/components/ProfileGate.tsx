@@ -1,6 +1,10 @@
 import { useState } from 'react';
 
 /**
+ * Tela de espera de perfil. Perfis são atribuídos INDIVIDUALMENTE por um Administrador; o formulário de
+ * código abaixo é o fluxo LEGADO (DEPRECATED) e só aparece quando o servidor o mantém ligado
+ * (`legacyEnabled`, vindo de /api/me.legacyProfileCodes).
+ *
  * Tela de desbloqueio por código de perfil (§7.2) — 2º fator APÓS o Google SSO.
  *
  * Aparece quando há sessão Google válida mas ainda sem papel. O código é validado NO SERVIDOR
@@ -10,6 +14,8 @@ import { useState } from 'react';
 export function ProfileGate(props: {
   email: string;
   onUnlock: (role: 'business' | 'tech' | 'admin', code: string) => Promise<boolean>;
+  /** @deprecated fluxo legado de código; default true só por compatibilidade — o App passa o valor do servidor. */
+  legacyEnabled?: boolean;
 }) {
   const [role, setRole] = useState<'business' | 'tech'>('business');
   const [code, setCode] = useState('');
@@ -27,6 +33,24 @@ export function ProfileGate(props: {
       setError('Código inválido para este perfil. Verifique com o administrador.');
       setCode('');
     }
+  }
+
+  if (props.legacyEnabled === false) {
+    return (
+      <div className="wrap" style={{ maxWidth: 440, margin: '8vh auto' }}>
+        <div className="panel">
+          <div className="brand" style={{ marginBottom: 8 }}>
+            BONDLY <span>· COMMERCIAL WORKSPACE</span>
+          </div>
+          <h2>Aguardando atribuição de perfil</h2>
+          <p className="sub" role="status">
+            Autenticado como <b>{props.email}</b>, mas ainda sem perfil. Peça a um Administrador para
+            atribuir seu perfil (Negócios, Projetos &amp; Tecnologia, Gestor/Aprovador ou Administrador).
+          </p>
+          <a className="cta" href="/auth/logout">Sair</a>
+        </div>
+      </div>
+    );
   }
 
   return (

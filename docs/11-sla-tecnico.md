@@ -109,3 +109,19 @@ reunião (não pausa) → complete, + RBAC. 10/10 checks, `metSla=true`.
   depende de infraestrutura de canais; não alegamos envio que não existe (§6.2).
 - **Métricas de tempo mediano/calendário total** no painel — o painel §6.6 traz os agregados
   essenciais (em análise/pausadas/vencidas/concluídas/% no prazo); histogramas são refino futuro.
+
+## 9. Indicadores de gestão P75/P90 (tempo útil efetivo)
+
+Implementado em `packages/pricing-engine/src/sla/indicators.ts` (puro, exportado, testado em `tests/slaIndicators.test.ts`). Não altera `reduceSla`, calendário nem regras de pricing.
+
+- **Amostra**: propostas com SLA `started` + `completed`. Em andamento ou pausadas ficam fora.
+- **Métrica principal**: **tempo útil efetivo** = dias úteis consumidos EXCLUINDO pausas (`businessDaysElapsed` do `reduceSla`). **Tempo bruto** (início→conclusão, com pausas) é calculado só como comparativo e rotulado "bruto" na UI.
+- **Saída**: `n`, média, mediana, P75, P90 (útil e bruto), `pctWithinSla` (útil ≤ 5 dias úteis) e tempo em pausa por motivo (dias úteis; motivo = texto da pausa com trim).
+- **ASSUMPTION, percentil nearest-rank inclusivo**: P(p) = valor na posição `ceil(p·n)` (base 1) da lista ordenada, sem interpolação. n=0 → `null`; n=1 → o próprio valor. Ex.: 1..10 → P75=8, P90=9. **Mediana** = definição clássica (média dos centrais se n é par), também ASSUMPTION. Tolerância de 1e-9 contra erro de ponto flutuante em `ceil(p·n)`.
+- **Endpoint**: `GET /api/sla/indicators` (ação `sla.view_indicators`: tech/approver/admin). Payload sem custo/margem/snapshot (testado). Exibido em `SlaDashboard` (`SlaIndicatorsPanel`).
+- **Limitação**: o motivo de pausa é texto livre; grafias diferentes viram linhas distintas (catálogo de motivos seria refino futuro). Sem filtro por período.
+
+
+## 10. G-006 — solicitações ao Gestor NÃO pausam o relógio
+
+O estado `aguardando_aprovacao_gestor` é ortogonal ao SLA: `reduceSla` não foi alterado e criar/decidir/invalidar solicitação não anexa nenhum `sla_event`. Teste (`approvals.test.ts`, memória e SQLite): eventos idênticos antes/depois e `reduceSla` em instante fixo com resultado igual. Pausar continua sendo ação explícita e justificada de P&T (§6.4). G-021: após `retomar`, tech/approver continuam alcançando SLA/auditoria/reuniões da proposta (podem pausar o relógio que segue correndo).

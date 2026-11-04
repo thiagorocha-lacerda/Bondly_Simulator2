@@ -58,7 +58,7 @@ services:
       - key: PROFILE_CODE_HASH_ADMIN
         sync: false
     # Disk persistente (Starter): SQLite sobrevive a redeploy/restart. Para Free, remover este bloco,
-    # a env DATA_DIR acima, e trocar plan: starter -> free (o repositório volta a in-memory).
+    # a env DATA_DIR acima, e trocar plan: starter -> free E definir ALLOW_EPHEMERAL_REPO=true (G-003: sem isso o servidor recusa subir em produção sem DATA_DIR; dados são perdidos no restart).
     disk:
       name: bondly-data
       mountPath: /var/data

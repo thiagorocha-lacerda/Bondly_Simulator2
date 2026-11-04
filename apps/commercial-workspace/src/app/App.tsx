@@ -21,6 +21,9 @@ import { ProfileGate } from '../components/ProfileGate';
 import { WorkflowStepper } from '../components/WorkflowStepper';
 import { useProposals } from '../hooks/useProposals';
 import { UserMenu } from '../components/UserMenu';
+import { AssignmentsAdmin } from '../components/AssignmentsAdmin';
+import { ApproverQueue } from '../components/ApprovalPanels';
+import { ROLE_LABELS } from '../hooks/roles';
 
 type Mode = 'quick' | 'advanced';
 
@@ -98,18 +101,18 @@ export function App() {
 
   // Papel business nunca fica em visão interna (§6.2). Aplica assim que o papel é conhecido.
   useEffect(() => {
-    if (role === 'business' && audience === 'internal') setAudience('external');
+    if ((role === 'business' || role === 'approver') && audience === 'internal') setAudience('external');
   }, [role, audience, setAudience]);
 
   // 2º fator (§7.2): havendo sessão Google SEM papel, exige o código de perfil antes de qualquer
   // conteúdo. Em dev sem BFF (user=null) não bloqueia — o simulador segue utilizável.
   if (user && role === null && !loading) {
-    return <ProfileGate email={user.email} onUnlock={unlock} />;
+    return <ProfileGate email={user.email} onUnlock={unlock} legacyEnabled={user.legacyProfileCodes === true} />;
   }
 
   // Papel business só enxerga a visão comercial (§6.2): custos/margens ficam fora por construção.
   // A fronteira REAL é o servidor (APIs filtradas por papel); aqui alinhamos a UI ao papel.
-  const forcedExternal = role === 'business';
+  const forcedExternal = role === 'business' || role === 'approver';
   const showInternal = internal && !forcedExternal;
   const effectiveMode: Mode = showInternal ? mode : 'quick';
 
@@ -145,7 +148,7 @@ export function App() {
         {showInternal && <span style={{ flex: 1 }} />}
         <div className="audienceswitch" role="group" aria-label="Visão (o que aparece na tela)">
           <span className="switchlabel" title="A visão comercial oculta custos, margens e dados internos — segura para mostrar ao cliente.">Visão:</span>
-          <button type="button" aria-pressed={audience === 'internal'} disabled={forcedExternal} title={forcedExternal ? 'Perfil Negócios: visão comercial apenas.' : undefined} onClick={() => setAudience('internal')}>
+          <button type="button" aria-pressed={audience === 'internal'} disabled={forcedExternal} title={forcedExternal && role ? `Perfil ${ROLE_LABELS[role]}: visão comercial apenas.` : undefined} onClick={() => setAudience('internal')}>
             Interna
           </button>
           <button type="button" aria-pressed={audience === 'external'} title="Oculta custos, margens, ARKA e resultado B2C/Minu — segura para o cliente." onClick={() => setAudience('external')}>
@@ -222,6 +225,8 @@ export function App() {
           <ResultsDashboard result={result} users={input.volume.users} />
           {showInternal && <ArkaPanel input={input} />}
           {role && <WorkflowStepper role={role} proposals={proposals} />}
+          {role === 'approver' && <ApproverQueue enabled={proposals.available} />}
+          {role === 'admin' && <AssignmentsAdmin />}
           <ScenarioPanel input={input} />
         </div>
       </div>

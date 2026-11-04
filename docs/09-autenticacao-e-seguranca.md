@@ -113,7 +113,7 @@ O `render.yaml` já descreve o Web Service. Configuração real a confirmar no p
 | Start | `npm run start --workspace @bondly/auth-proxy` |
 | Health check | `/healthz` |
 | Secrets (Environment) | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (sync:false), `SESSION_SECRET` (generateValue) |
-| Vars | `NODE_ENV=production`, `NODE_VERSION=20`, `STATIC_DIR`, `PUBLIC_URL` (a URL real pós-primeiro deploy) |
+| Vars | `NODE_ENV=production`, `NODE_VERSION=22`, `STATIC_DIR`, `PUBLIC_URL` (a URL real pós-primeiro deploy) |
 
 ### Checklist de publicação
 

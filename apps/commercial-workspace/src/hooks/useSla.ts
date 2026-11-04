@@ -36,7 +36,7 @@ export interface UseSla {
   readonly loading: boolean;
   readonly available: boolean;
   refresh: () => Promise<void>;
-  pause: (reason: string, missingItems?: string[]) => Promise<boolean>;
+  pause: (reason: string, missingItems?: string[], reasonCode?: string) => Promise<boolean>;
   resume: (confirmedItems?: string[]) => Promise<boolean>;
   complete: (verdict: string) => Promise<boolean>;
   requestMeeting: (objective: string, scheduledFor?: string) => Promise<boolean>;
@@ -112,7 +112,8 @@ export function useSla(proposalId: string | null, enabled: boolean): UseSla {
     loading,
     available,
     refresh,
-    pause: (reason, missingItems = []) => act(`/api/proposals/${proposalId}/sla/pause`, { reason, missingItems }),
+    pause: (reason, missingItems = [], reasonCode) =>
+      act(`/api/proposals/${proposalId}/sla/pause`, { reason, missingItems, ...(reasonCode ? { reasonCode } : {}) }),
     resume: (confirmedItems = []) => act(`/api/proposals/${proposalId}/sla/resume`, { confirmedItems }),
     complete: (verdict) => act(`/api/proposals/${proposalId}/sla/complete`, { verdict }),
     requestMeeting: (objective, scheduledFor) => act(`/api/proposals/${proposalId}/meetings`, { objective, ...(scheduledFor ? { scheduledFor } : {}) }),

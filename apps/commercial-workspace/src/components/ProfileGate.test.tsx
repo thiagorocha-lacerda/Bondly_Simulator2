@@ -39,4 +39,11 @@ describe('ProfileGate (§7.2)', () => {
     await user.click(screen.getByRole('button', { name: /Desbloquear perfil/i }));
     expect(onUnlock).toHaveBeenCalledWith('tech', 'tek');
   });
+
+  it('sem fluxo legado: mostra "aguardando atribuição" e NÃO pede código', () => {
+    render(<ProfileGate email="ana@minu.co" onUnlock={vi.fn()} legacyEnabled={false} />);
+    expect(screen.getByText(/Aguardando atribuição de perfil/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Código de acesso/i)).toBeNull();
+    expect(screen.getByText('Sair')).toHaveAttribute('href', '/auth/logout');
+  });
 });

@@ -7,7 +7,10 @@ import type { ServerConfig } from './config.js';
 import type { SessionData } from './session.js';
 import type { Role } from './rbac.js';
 
+// Modo LEGADO (LEGACY_PROFILE_CODES=true) só para que estes testes de lógica de endpoint sigam usando o papel na sessão.
+// A resolução real por atribuição individual (default) é coberta em rbacApi.test.ts.
 const cfg = {
+  legacyProfileCodes: true,
   profileCodeHashes: { business: scryptHasher.hash('biz'), tech: scryptHasher.hash('tek') },
 } as unknown as ServerConfig;
 
@@ -80,9 +83,10 @@ describe('API — RBAC e filtragem de payload por papel (§6/§8)', () => {
     const repo = createMemoryRepository();
     const created = await handleApi({ method: 'POST', path: '/api/proposals', session: sess('business'), body: { commercial: { users: 50000 } }, repo, cfg });
     const id = (created.body as { proposal: { id: string } }).proposal.id;
+    await repo.update(id, 1, { status: 'aguardando_analise_tecnica' }, { actorEmail: 'ana@minu.co', role: 'business', action: 'test.submit' }); // G-002: tech só lê fora do rascunho
 
     // P&T preenche parecer técnico
-    const edited = await handleApi({ method: 'PUT', path: `/api/proposals/${id}/technical`, session: sess('tech'), body: { version: 1, technical: { integrations: 3, risks: 'migração legada', verdict: 'ajustes' } }, repo, cfg });
+    const edited = await handleApi({ method: 'PUT', path: `/api/proposals/${id}/technical`, session: sess('tech'), body: { version: 2, technical: { integrations: 3, risks: 'migração legada', verdict: 'ajustes' } }, repo, cfg });
     expect(edited.status).toBe(200);
 
     // P&T vê o technical completo

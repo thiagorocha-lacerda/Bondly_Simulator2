@@ -110,6 +110,16 @@ export type {
   SlaConfig,
   SlaState,
 } from './sla/clock.js';
+// Indicadores P75/P90 do SLA (tempo útil efetivo; nearest-rank)
+export {
+  percentileNearestRank,
+  mean as slaMean,
+  median as slaMedian,
+  sampleFromSlaEvents,
+  computeSlaIndicators,
+  computeSlaIndicatorsFromEvents,
+} from './sla/indicators.js';
+export type { SlaSample, SlaIndicators, DistributionStats, PauseByReason } from './sla/indicators.js';
 export {
   canMeetingTransition,
   isMeetingTransition,

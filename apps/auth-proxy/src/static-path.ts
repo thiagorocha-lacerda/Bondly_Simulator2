@@ -24,3 +24,8 @@ export function resolveStaticPath(staticDir: string, urlPath: string): StaticRes
   }
   return { ok: true, filePath, rel };
 }
+
+/** G-020: o caminho (com ou sem barra inicial) está sob /assets/? Asset inexistente ⇒ 404, nunca o HTML do SPA. */
+export function isAssetPath(rel: string): boolean {
+  return rel.replace(/^[\\/]+/, '').toLowerCase().startsWith('assets/');
+}

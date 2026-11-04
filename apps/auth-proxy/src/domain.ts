@@ -16,7 +16,9 @@ export type WorkflowState =
   | 'aprovado_tecnicamente'
   | 'reprovado'
   | 'pronto_para_emissao'
-  | 'emitido';
+  | 'emitido'
+  /** G-006: sub-estado de espera pela decisão do Gestor/Aprovador. NÃO pausa nem reinicia o relógio de SLA. */
+  | 'aguardando_aprovacao_gestor';
 
 /**
  * Entradas comerciais (preenchidas por Negócios). Mantidas como JSON opaco do ponto de vista do
@@ -108,6 +110,89 @@ export interface MeetingRecord {
   readonly updatedAt: string;
 }
 
+/**
+ * Atribuição INDIVIDUAL de perfil: user_email → role (ASSUMPTION doc 10 §9, reversível). Gerida SOMENTE
+ * por admin (ou pelo bootstrap por env). Resolvida do repositório a cada request ⇒ revogação imediata.
+ */
+export interface RoleAssignment {
+  readonly email: string; // minúsculo, domínio autorizado
+  readonly role: Role;
+  readonly assignedBy: string;
+  readonly assignedAt: string;
+}
+
+/** Auditoria APPEND-ONLY de atribuições: quem/quando/de/para. `null` = sem perfil (revogado). */
+export interface AssignmentAuditEntry {
+  readonly id: string;
+  readonly targetEmail: string;
+  readonly actorEmail: string; // e-mail do admin, ou 'bootstrap:env'
+  readonly fromRole: Role | null;
+  readonly toRole: Role | null;
+  readonly at: string;
+}
+
+/** G-002: auditoria APPEND-ONLY de reatribuição de dono (quem/quando/de/para/proposta). `fromOwner` '' = legado sem dono. */
+export interface OwnerAuditEntry {
+  readonly id: string;
+  readonly proposalId: string;
+  readonly actorEmail: string;
+  readonly fromOwner: string;
+  readonly toOwner: string;
+  readonly at: string;
+}
+
+/** G-006: tipos FECHADOS de solicitação ao Gestor/Aprovador (enum). */
+export const APPROVAL_KINDS = ['excecao_comercial', 'alteracao_escopo', 'replanejamento_sla'] as const;
+export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
+export type ApprovalRequestStatus = 'pending' | 'approved' | 'rejected' | 'invalidated';
+
+/** G-006: solicitação ao Gestor/Aprovador. Referencia a VERSÃO da proposta; decisão vinculada ao snapshot. */
+export interface ApprovalRequest {
+  readonly id: string;
+  readonly proposalId: string;
+  readonly kind: ApprovalKind;
+  readonly status: ApprovalRequestStatus;
+  readonly requestedBy: string;
+  readonly requestedByRole: Role;
+  readonly justification: string;
+  /** Versão da proposta no momento da solicitação. */
+  readonly proposalVersion: number;
+  /** Estado da esteira para o qual a proposta volta ao decidir. */
+  readonly previousState: WorkflowState;
+  readonly createdAt: string;
+  readonly decidedBy?: string;
+  readonly decidedAt?: string;
+  readonly decisionJustification?: string;
+  /** Versão da proposta já com a decisão aplicada (vínculo da exceção ao snapshot/versão vigente). */
+  readonly decidedProposalVersion?: number;
+  readonly invalidatedAt?: string;
+  readonly invalidatedReason?: string;
+}
+
+/** G-006: conflitos de negócio na criação da solicitação. */
+export class ApprovalConflictError extends Error {
+  constructor(readonly code: 'pending_exists' | 'invalid_state' | 'approval_pending' | 'stale') {
+    super(`approval_conflict:${code}`);
+    this.name = 'ApprovalConflictError';
+  }
+}
+
+/** G-025: proposta já `emitido` é imutável (snapshot entregue ao cliente) — edição comercial/técnica recusada. */
+export class IssuedImmutableError extends Error {
+  constructor(readonly id: string) {
+    super(`proposta emitida é imutável: ${id}`);
+    this.name = 'IssuedImmutableError';
+  }
+}
+
+/** Tentativa de remover/rebaixar o último admin (evita lockout). */
+export class LastAdminError extends Error {
+  constructor() {
+    super('não é permitido remover o último administrador');
+    this.name = 'LastAdminError';
+  }
+}
+
 /** Erro de concorrência (optimistic lock) — escrita com versão defasada (§5.2). */
 export class VersionConflictError extends Error {
   constructor(
@@ -150,12 +235,97 @@ export interface ProposalRepository {
     expectedVersion: number,
     patch: Partial<Pick<Proposal, 'status' | 'commercial' | 'technical' | 'snapshot'>>,
     audit: Omit<AuditEntry, 'id' | 'proposalId' | 'at'>,
+    /**
+     * G-002 (anti-TOCTOU): se `requireOwner` for informado, o repositório recusa (NotFoundError ⇒ 404) quando o dono
+     * ATUAL da proposta não for esse e-mail — checado na mesma operação do UPDATE, antes da versão.
+     */
+    opts?: { requireOwner?: string },
   ): Promise<Proposal>;
+  /**
+   * G-023/G-024: edição comercial/técnica ATÔMICA (update da proposta + invalidação das solicitações + auditoria na
+   * MESMA transação). Com solicitação PENDENTE (qualquer kind): edição material a invalida e devolve a proposta ao
+   * estado ANTERIOR à solicitação já passado por `statusAfterMaterialEdit` (reanálise); edição NÃO material é
+   * recusada (ApprovalConflictError('approval_pending') ⇒ 409). Lança VersionConflictError / NotFoundError.
+   */
+  editProposal(args: {
+    id: string;
+    expectedVersion: number;
+    edit: 'commercial' | 'technical';
+    patch: { commercial?: Proposal['commercial']; technical?: Proposal['technical'] };
+    material: boolean;
+    actor: { email: string; role: Role };
+    action: string;
+    requireOwner?: string;
+  }): Promise<{ proposal: Proposal; invalidated: readonly ApprovalRequest[]; stateInvalidated: boolean }>;
+  /**
+   * G-002: troca o dono da proposta e grava owner_audit NA MESMA transação; incrementa `version`.
+   * Lança NotFoundError se a proposta não existir.
+   */
+  reassignOwner(id: string, toOwner: string, actorEmail: string): Promise<{ proposal: Proposal; audit: OwnerAuditEntry }>;
+  ownerAudit(proposalId: string): Promise<readonly OwnerAuditEntry[]>;
   audit(id: string): Promise<readonly AuditEntry[]>;
+  /** Grava uma entrada de auditoria SEM alterar a proposta (ex.: decisão do aprovador). Append-only. */
+  appendAuditEntry(proposalId: string, entry: Omit<AuditEntry, 'id' | 'proposalId' | 'at'>): Promise<void>;
+  /**
+   * G-018: registra a decisão do approver de forma ATÔMICA (UNIQUE(proposal_id, kind) + auditoria na mesma
+   * operação). `created:true` = esta chamada venceu; `created:false` = já existia — `decision` é a VENCEDORA
+   * (quem chamou compara com a sua para responder 200 idempotente ou 409). Lança NotFoundError.
+   */
+  recordApprovalDecision(
+    proposalId: string,
+    kind: string,
+    decision: 'approved' | 'rejected',
+    entry: Omit<AuditEntry, 'id' | 'proposalId' | 'at' | 'action'>,
+  ): Promise<{ created: boolean; decision: 'approved' | 'rejected' }>;
+  /**
+   * G-006: cria a solicitação E move a proposta para `aguardando_aprovacao_gestor` (version+1) E grava a auditoria,
+   * tudo na MESMA transação. Valida `fromState` e `expectedVersion` (lock otimista) dentro da transação.
+   * No máximo UMA solicitação pendente por proposta. Lança NotFoundError (inclui requireOwner), VersionConflictError,
+   * ApprovalConflictError.
+   */
+  createApprovalRequest(args: {
+    proposalId: string;
+    kind: ApprovalKind;
+    requestedBy: string;
+    requestedByRole: Role;
+    justification: string;
+    expectedVersion: number;
+    fromState: WorkflowState;
+    requireOwner?: string;
+  }): Promise<{ request: ApprovalRequest; proposal: Proposal }>;
+  getApprovalRequest(id: string): Promise<ApprovalRequest | null>;
+  listApprovalRequests(filter?: { status?: ApprovalRequestStatus; proposalId?: string }): Promise<readonly ApprovalRequest[]>;
+  /**
+   * G-006 (estende o padrão atômico/idempotente de recordApprovalDecision): decide a solicitação com UPDATE condicional
+   * `WHERE status='pending'` (uma decisão por solicitação), devolve a proposta ao estado anterior (version+1) e grava
+   * a auditoria na MESMA transação. `created:false` = já decidida (`request.status` é a vencedora).
+   */
+  decideApprovalRequest(
+    id: string,
+    decision: 'approved' | 'rejected',
+    decider: { email: string; role: Role },
+    justification: string,
+  ): Promise<{ created: boolean; request: ApprovalRequest; proposal: Proposal }>;
+  /**
+   * G-006: invalida (pending/approved ⇒ invalidated) as solicitações dos `kinds` afetados por mudança material,
+   * com auditoria na mesma transação. Devolve as invalidadas (para o chamador refletir no estado, se pendentes).
+   */
+  invalidateApprovals(proposalId: string, kinds: readonly ApprovalKind[], actor: { email: string; role: Role }, reason: string): Promise<readonly ApprovalRequest[]>;
   /** Anexa um evento de SLA (append-only). O estado do relógio é derivado destes via reduceSla. */
   appendSlaEvent(event: Omit<SlaEventRow, 'id'>): Promise<void>;
   /** Lê os eventos de SLA de uma proposta em ordem cronológica (by `at`). */
   slaEvents(proposalId: string): Promise<readonly SlaEventRow[]>;
+  /** Todos os eventos de SLA (para indicadores gerenciais); ordem cronológica. */
+  allSlaEvents(): Promise<readonly SlaEventRow[]>;
+  /** Perfil atribuído ao usuário (null = sem perfil). */
+  getAssignment(email: string): Promise<RoleAssignment | null>;
+  listAssignments(): Promise<readonly RoleAssignment[]>;
+  /**
+   * Define (role) ou revoga (null) o perfil do usuário e grava a auditoria na MESMA operação.
+   * Lança LastAdminError se a mudança deixaria o sistema sem admin.
+   */
+  setAssignment(email: string, role: Role | null, actorEmail: string): Promise<AssignmentAuditEntry>;
+  assignmentAudit(): Promise<readonly AssignmentAuditEntry[]>;
   /** Cria uma reunião técnica (estado inicial 'solicitada'). §6.3. */
   createMeeting(args: { proposalId: string; objective: string; by: string; scheduledFor?: string }): Promise<MeetingRecord>;
   /** Lê as reuniões técnicas de uma proposta. */

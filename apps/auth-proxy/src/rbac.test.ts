@@ -49,3 +49,51 @@ describe('RBAC — decisão pura (§6)', () => {
     expect(isRole(1)).toBe(false);
   });
 });
+
+import { ACTIONS, ROLES, ROLE_LABELS, type Role } from './rbac.js';
+
+/** Matriz esperada EXPLÍCITA (4 perfis × todas as ações). Mudar a matriz exige mudar este teste. */
+const EXPECTED: Record<Role, readonly Action[]> = {
+  business: ['proposal.create', 'proposal.read', 'proposal.edit_commercial', 'proposal.edit_tier_discount', 'proposal.emit', 'approval.request', 'pricing.quote'],
+  tech: [
+    'proposal.read',
+    'proposal.edit_technical',
+    'proposal.see_internal',
+    'proposal.validate_technical',
+    'proposal.read_audit_full',
+    'sla.manage',
+    'sla.view_indicators',
+    'approval.request',
+    'pricing.quote',
+  ],
+  approver: ['proposal.read', 'approval.decide', 'approval.read_queue', 'sla.view_indicators', 'pricing.quote'],
+  admin: ['proposal.read', 'proposal.see_internal', 'proposal.read_audit_full', 'sla.manage', 'sla.configure', 'sla.view_indicators', 'admin.manage_users', 'admin.reassign_owner', 'pricing.quote'],
+};
+
+describe('RBAC — matriz completa 4 perfis × todas as ações', () => {
+  it('são exatamente 4 perfis com rótulos pt-BR', () => {
+    expect([...ROLES].sort()).toEqual(['admin', 'approver', 'business', 'tech']);
+    expect(ROLE_LABELS).toEqual({
+      business: 'Negócios',
+      tech: 'Projetos & Tecnologia',
+      approver: 'Gestor/Aprovador',
+      admin: 'Administrador',
+    });
+  });
+  for (const role of ROLES) {
+    for (const action of ACTIONS) {
+      const expected = EXPECTED[role].includes(action);
+      it(`${role} × ${action} → ${expected ? 'permite' : 'nega'}`, () => {
+        expect(can(role, action)).toBe(expected);
+      });
+    }
+  }
+  it('approver NÃO edita dimensionamento técnico nem configuração; business sem custo/margem', () => {
+    expect(can('approver', 'proposal.edit_technical')).toBe(false);
+    expect(can('approver', 'sla.configure')).toBe(false);
+    expect(can('approver', 'admin.manage_users')).toBe(false);
+    expect(can('business', 'sla.view_indicators')).toBe(false);
+    expect(canSeeInternal('business')).toBe(false);
+    expect(canSeeInternal('approver')).toBe(false);
+  });
+});

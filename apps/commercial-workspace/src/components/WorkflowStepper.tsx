@@ -4,7 +4,8 @@ import type { ProposalView, UseProposals } from '../hooks/useProposals';
 import { SlaCard } from './SlaCard';
 import { SlaDashboard } from './SlaDashboard';
 
-type Role = 'business' | 'tech' | 'admin';
+import type { Role } from '../hooks/roles';
+import { RequestApproval } from './ApprovalPanels';
 
 /** Fases da esteira na ordem (§9) + rótulo e responsável. */
 const PHASES: readonly { state: string; label: string; owner: string }[] = [
@@ -45,7 +46,11 @@ const STATUS_CLASS: Record<string, string> = {
   aguardando_analise_tecnica: 'info',
   pronto_para_emissao: 'ok',
   rascunho_comercial: 'info',
+  aguardando_aprovacao_gestor: 'warn',
 };
+
+/** G-006: sub-estado fora da sequência linear; o SLA segue correndo enquanto aguarda. */
+const AWAITING = { state: 'aguardando_aprovacao_gestor', label: 'Aguardando aprovação do gestor', owner: 'Gestor/Aprovador' } as const;
 
 /**
  * Esteira Negócios→P&T (§5/§9): stepper por fase, status/responsável por proposta e as ações
@@ -98,7 +103,7 @@ export function WorkflowStepper(props: { role: Role; proposals: UseProposals }) 
 
       {proposals.proposals.map((p) => {
         const idx = PHASES.findIndex((f) => f.state === p.status);
-        const phase = PHASES.find((f) => f.state === p.status);
+        const phase = p.status === AWAITING.state ? AWAITING : PHASES.find((f) => f.state === p.status);
         const acts = actionsFor(p.status, role);
         return (
           <div key={p.id} className="field full" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
@@ -125,6 +130,11 @@ export function WorkflowStepper(props: { role: Role; proposals: UseProposals }) 
                   {f.label}
                 </span>
               ))}
+              {p.status === AWAITING.state && (
+                <span title={`${AWAITING.label} · o SLA não é pausado`} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--border)', background: 'var(--btn-primary-bg)', color: 'var(--btn-primary-text)' }}>
+                  {AWAITING.label}
+                </span>
+              )}
             </div>
 
             <div className="sub" style={{ margin: '4px 0' }}>
@@ -141,6 +151,8 @@ export function WorkflowStepper(props: { role: Role; proposals: UseProposals }) 
                 ))}
               </div>
             )}
+
+            <RequestApproval proposalId={p.id} version={p.version} status={p.status} role={role} onDone={() => void proposals.refresh()} />
 
             {/* SLA técnico (§6): relógio + ações de P&T + reuniões */}
             <SlaCard proposalId={p.id} role={role} enabled={proposals.available} />

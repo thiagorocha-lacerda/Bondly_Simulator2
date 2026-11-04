@@ -18,5 +18,5 @@ export default defineConfig({
   },
   server: { host: '127.0.0.1', port: 5173 },
   preview: { host: '127.0.0.1', port: 4173 },
-  build: { outDir: 'dist', sourcemap: true },
+  build: { outDir: 'dist', sourcemap: false /* G-001: sem .map no build */ },
 });

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useSla } from '../hooks/useSla';
+import { PAUSE_REASONS, MAX_PAUSE_REASON_CHARS } from '../hooks/pauseReasons';
 
-type Role = 'business' | 'tech' | 'admin';
+import type { Role } from '../hooks/roles';
 
 const HEALTH_LABEL: Record<string, { text: string; cls: string }> = {
   no_prazo: { text: 'No prazo', cls: 'ok' },
@@ -37,6 +38,7 @@ export function SlaCard({ proposalId, role, enabled }: { proposalId: string; rol
   const s = useSla(proposalId, enabled);
   const [busy, setBusy] = useState(false);
   const [pauseReason, setPauseReason] = useState('');
+  const [reasonCode, setReasonCode] = useState('');
   const [objective, setObjective] = useState('');
 
   if (!s.available || !s.sla) return null;
@@ -72,14 +74,26 @@ export function SlaCard({ proposalId, role, enabled }: { proposalId: string; rol
       {/* Controles técnicos — só P&T/admin (§6.6) */}
       {canManage && sla.phase === 'em_andamento' && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
+          <select
+            aria-label="Motivo da pausa (categoria)"
+            value={reasonCode}
+            onChange={(e) => setReasonCode(e.target.value)}
+            style={{ padding: '6px 8px', fontSize: 12, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text, inherit)' }}
+          >
+            <option value="">Selecione o motivo…</option>
+            {PAUSE_REASONS.map((r) => (
+              <option key={r.code} value={r.code}>{r.label}</option>
+            ))}
+          </select>
           <input
             type="text"
-            placeholder="Motivo da pausa (obrigatório)"
+            maxLength={MAX_PAUSE_REASON_CHARS}
+            placeholder="Detalhe da pausa (obrigatório)"
             value={pauseReason}
             onChange={(e) => setPauseReason(e.target.value)}
             style={{ flex: '1 1 180px', padding: '6px 8px', fontSize: 12, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text, inherit)' }}
           />
-          <button type="button" className="ghostbtn" disabled={busy || !pauseReason.trim()} onClick={() => run(() => s.pause(pauseReason.trim()))}>
+          <button type="button" className="ghostbtn" disabled={busy || !reasonCode || !pauseReason.trim()} onClick={() => run(async () => { const ok = await s.pause(pauseReason.trim(), [], reasonCode); if (ok) { setPauseReason(''); setReasonCode(''); } return ok; })}>
             Pausar relógio
           </button>
           {VERDICTS.map((v) => (

@@ -9,3 +9,8 @@ coverage/
 .env.*
 !.env.example
 *.tsbuildinfo
+*.db
+*.db-wal
+*.db-shm
+data/
+sla-e2e-*/

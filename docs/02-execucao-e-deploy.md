@@ -1,6 +1,6 @@
 # Execução, build e deploy — Bondly Commercial Platform
 
-Monorepo npm workspaces. Node ≥ 20.
+Monorepo npm workspaces. Node ≥ 22.
 
 ## Instalação
 
@@ -36,7 +36,7 @@ Configuração versionada em `render.yaml` (Blueprint):
 | Build Command | `npm ci && npm run build --workspace @bondly/commercial-workspace && npm run build --workspace @bondly/auth-proxy` |
 | Start Command | `npm run start --workspace @bondly/auth-proxy` |
 | Health check | `/healthz` |
-| Node | `NODE_VERSION=20` |
+| Node | `NODE_VERSION=22` |
 | SPA fallback | feito no servidor (rota sem arquivo → `index.html`, preservando `/assets/*`) |
 | Segredos | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (sync:false); `SESSION_SECRET` (generateValue) |
 | Vars | `NODE_ENV=production`, `STATIC_DIR`, `PUBLIC_URL` (a URL real pós-1º deploy) |

@@ -65,3 +65,21 @@ Campos principais (ver o tipo completo para a lista exaustiva):
 As interfaces de entrada/saída são o contrato público. Mudanças que quebram o formato exigem bump de
 `ENGINE_VERSION` (semver MAJOR). Novos campos opcionais de saída são MINOR. A **tabela de premissas**
 tem seu próprio versionamento (`premisesVersion` + `premisesHash`), independente da versão do motor.
+
+## QuoteView — contrato de saída da cotação no servidor (`quote.v1`, G-001-A)
+
+Projeção por perfil do `PricingResult` (fonte única = Pricing Engine). Devolvida por `POST /api/pricing/quote`.
+Fronteira de confidencialidade (CWE-200/CWE-602): custo, margem, COGS, tributo, fee Minu, premissa de custo e
+breakdown existem **apenas** em `internal`. Módulo `quoteProjection.ts` (puro). `contractVersion: "quote.v1"`.
+
+| view | papel | conteúdo | NUNCA contém |
+|---|---|---|---|
+| `client` | peça p/ o cliente | `view`, `contractVersion`, `engineVersion`, `premisesVersion`, `plan`, `termMonths`, `pricing` (monthly, setupHours, setupTotal, firstYearTotal, tcv), `discounts` (públicos), `scenarios` | política, composição, waterfall, Setup detalhado, qualquer custo/margem |
+| `commercial` | business/approver | client **+** `composition` (coreMonthly…), `waterfall` (final…), Setup detalhado, alçada, `policy.marginAlert { level, requiresApproval }` (SINAL, sem valores) | custo, margem, COGS, tributo, fee Minu, breakdown, `marginValue` |
+| `internal` | tech/admin (`proposal.see_internal`) | commercial **+** `result` (`PricingResult` completo, bit-a-bit = `calculate(input)`), `scenariosFull` | — (única visão com custo/margem) |
+
+- **marginAlert.level** ∈ `ok | review | below_floor | custom | incomplete`, derivado do `marginStatus` do engine
+  (`REPRECIFICAR`→`below_floor`+`requiresApproval:true`). Não cria limite novo — piso/meta são premissas do engine.
+- **Visão máxima por papel:** `maxViewFor` — `see_internal`⇒`internal`; demais com `pricing.quote`⇒`commercial`. Pedir acima do direito ⇒ 403 `view_forbidden`.
+- **Paridade (REQUIREMENT, provada por teste):** `QuoteView.internal.result ≡ calculate(input)` (igualdade estrutural e serializada) em todos os cenários de `parityInputs()`.
+- **Invariante estrutural (REQUIREMENT, provado por teste):** varredura recursiva de `client`/`commercial` não acha nenhuma chave/valor proibido (`cost|custo|cogs|margin|margem|tax|tributo|fee Minu|premissa de custo|marginValue`); única exceção permitida em `commercial` é `policy.marginAlert` com exatamente `{level, requiresApproval}`.
