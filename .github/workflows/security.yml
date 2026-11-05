@@ -1,0 +1,99 @@
+name: Security Scans
+
+# Scans de segurança complementares à CI de verificação (ci.yml): secret scan (gitleaks),
+# SAST (Semgrep) e dependências (npm audit). Pré-requisito do Production Readiness Review (docs/18).
+# Fecha os findings de processo F-05 (dependency scan) e as Recommended Actions do Guardian
+# (secret scan de histórico + SAST). O scan de imagem de container (trivy) só é adicionado quando
+# existir um Dockerfile de serviço publicado em registry — hoje o deploy é manual (docs/13), então
+# o trivy fica documentado como passo condicional (ver bloco comentado ao fim).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Varredura semanal (segunda 06:00 UTC) para pegar CVEs novos em deps já mescladas.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (histórico completo p/ varrer todos os commits)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # Sem licença corporativa; a Action roda em modo OSS. Falha o job se achar segredo.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Semgrep (regras auto + segurança JS/TS)
+        # `--error` faz o job FALHAR em findings bloqueantes. Regras gerenciadas p/ TypeScript/React/Node.
+        run: semgrep scan --error --config=auto --config="p/typescript" --config="p/react" --config="p/nodejs"
+
+  dependencies:
+    name: Dependências (npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (workspaces)
+        run: npm ci
+
+      - name: Audit do CAMINHO DE PRODUÇÃO (bloqueante)
+        # Só dependências que chegam ao runtime shippado. É o gate real: deve ser 0 em high+.
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit COMPLETO (dev incluso — informativo, não bloqueia)
+        # F-05: as vulnerabilidades da cadeia de teste/build (vitest/vite/esbuild/tinypool) são dev-only
+        # e NÃO são shippadas. Reportadas aqui para visibilidade/gestão (PQ-029), sem reprovar a pipeline.
+        # Quando um bump deliberado da cadeia Vitest/Vite estiver disponível, aplicar e re-rodar a suíte
+        # completa (NÃO usar `npm audit fix --force` cego numa dep de tooling).
+        run: npm audit || true
+        continue-on-error: true
+
+  # --- Container image scan (trivy) — CONDICIONAL, habilitar quando houver imagem publicada ---
+  # O deploy atual é manual (docs/13) e não há imagem de container publicada em registry. Quando o
+  # time publicar a imagem (ex.: build do Dockerfile e push para ECR/GHCR), adicionar um job:
+  #
+  # container-scan:
+  #   name: Container image (trivy)
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #     - name: Build image
+  #       run: docker build -t bondly-commercial-platform:ci .
+  #     - name: Trivy (falha em HIGH/CRITICAL)
+  #       uses: aquasecurity/trivy-action@master
+  #       with:
+  #         image-ref: 'bondly-commercial-platform:ci'
+  #         severity: 'HIGH,CRITICAL'
+  #         exit-code: '1'
