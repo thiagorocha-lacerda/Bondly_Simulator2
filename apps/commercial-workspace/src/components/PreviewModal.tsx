@@ -103,8 +103,11 @@ export function PreviewModal(props: {
       const id = formatProposalId(n);
       // G-001 Fase 4: o PDF é montado a partir do QuoteView PROJETADO POR PERFIL (a mesma fonte das telas),
       // NÃO de um ProposalSnapshot do engine. Em DEV projetamos localmente (projectQuotePreview, espelho do
-      // servidor); em produção o QuoteView vem do fio. `kind` decide a view: internal ⇒ 'internal', external ⇒
-      // 'commercial' (peça do cliente — sem custo/margem, que não existem no payload). O gerador NÃO toca o engine.
+      // servidor); em produção o QuoteView vem do fio. REGRA DE VIEW (F-PDF-04, decisão de produto do sponsor):
+      // o PDF EXTERNO entregue ao cliente usa a view 'client' (peça enxuta — SEM composição de preço, waterfall
+      // de descontos nem alçada); o PDF INTERNO (botão gated por audience interna / proposal.see_internal) usa
+      // 'internal' (composição completa, margens, ARKA). A view 'commercial' não é mais exercitada pela UI.
+      // Nenhuma das views de cliente carrega custo/margem no payload (fronteira estrutural). O gerador NÃO toca o engine.
       const eng = await loadDevEngine();
       const snap = eng.createProposalSnapshot({
         id,
@@ -113,7 +116,7 @@ export function PreviewModal(props: {
         ...(props.selectedModules ? { selectedModules: props.selectedModules } : {}),
       }) as unknown as ProposalSnapshot;
       const view = projectQuotePreview(
-        kind === 'internal' ? 'internal' : 'commercial',
+        kind === 'internal' ? 'internal' : 'client',
         snap.result,
         snap.input.negotiation.term,
         snap.scenarios.map((s) => ({ name: s.name, result: s.result })),

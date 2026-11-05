@@ -84,7 +84,8 @@ describe('PDF por perfil — confidencialidade estrutural (QuoteView)', () => {
 
     const t = await textsFor('client');
     for (const re of INTERNAL_TERMS) expect(t).not.toMatch(re);
-    expect(t).toMatch(/Investimento mensal estimado/i);
+    // Conteúdo esperado na peça externa (redesign docs/20 §4): KPI de investimento + módulos + eyebrow de perfil.
+    expect(t).toMatch(/Resumo do investimento/i);
     expect(t).toMatch(/Motor de Pontos/i);
     expect(t).toMatch(/PROPOSTA COMERCIAL/i);
   });
@@ -98,7 +99,7 @@ describe('PDF por perfil — confidencialidade estrutural (QuoteView)', () => {
     }
     const t = await textsFor('commercial');
     for (const re of INTERNAL_TERMS) expect(t).not.toMatch(re);
-    expect(t).toMatch(/Investimento mensal estimado/i);
+    expect(t).toMatch(/Resumo do investimento/i);
     expect(t).toMatch(/PROPOSTA COMERCIAL/i);
   });
 

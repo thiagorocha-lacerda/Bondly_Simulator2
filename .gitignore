@@ -14,3 +14,4 @@ coverage/
 *.db-shm
 data/
 sla-e2e-*/
+scripts/out/

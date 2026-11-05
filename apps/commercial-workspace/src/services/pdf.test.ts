@@ -37,4 +37,21 @@ describe('generateQuotePdf — peça comercial a partir do QuoteView', () => {
     const int = await generateQuotePdf(viewFor('internal', DEFAULT_INPUT, ['points', 'engagement']), META);
     expect(int.output('arraybuffer').byteLength).toBeGreaterThan(ext.output('arraybuffer').byteLength);
   });
+
+  // F-PDF-04: a peça EXTERNA entregue ao cliente usa a view 'client' (enxuta — sem composição de preço,
+  // waterfall de descontos nem alçada). Trava o contrato de projeção: 'client' NÃO carrega esses campos,
+  // enquanto 'commercial' carrega. Confidencialidade preservada em ambas (nenhuma expõe `result`/COGS/margem).
+  it("view 'client' (botão externo) é mais enxuta que 'commercial': sem composição/waterfall/alçada, e sem result", () => {
+    const client = viewFor('client') as unknown as Record<string, unknown>;
+    const commercial = viewFor('commercial') as unknown as Record<string, unknown>;
+    expect(client.view).toBe('client');
+    expect(client.composition).toBeUndefined();
+    expect(client.waterfall).toBeUndefined();
+    expect(client.discountCorridor).toBeUndefined();
+    expect(commercial.composition).toBeDefined();
+    expect(commercial.waterfall).toBeDefined();
+    // fronteira de confidencialidade: nenhuma view de cliente expõe o PricingResult interno (COGS/margem)
+    expect(client.result).toBeUndefined();
+    expect(commercial.result).toBeUndefined();
+  });
 });

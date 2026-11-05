@@ -1139,3 +1139,226 @@ Typecheck 5/5 · 854 testes · 3 builds · bundle gate 0 · `npm audit --omit=de
 **Recommended Actions:** F-04, F-05, ADR, validação visual, PRR — nesta ordem de preparação para produção.
 
 > **Autorreview:** esta revisão foi feita pelo Guardian sobre código de OUTRO autor (product-fullstack). AUTOR ≠ REVISOR respeitado (§8.3/§13). Nenhum código foi escrito/alterado por mim nesta run.
+
+---
+
+## Resposta do autor (redesign PDF) — product-fullstack
+
+**Escopo:** reimplementação de `apps/commercial-workspace/src/services/pdf.ts` conforme a SPEC VISUAL
+`docs/20-spec-visual-pdf.md`, replicando a referência do sponsor à risca. Sem commit/push/AWS; não marco VERIFIED.
+
+**DECISION (sponsor, fixa):** replicar a referência à risca — cor de destaque **verde-limão `#C2FF01`**
+(`rg 0.761 1 0.004`) e fontes **Space Grotesk** (títulos/corpo) + **Geist Mono** (números/eyebrows/labels/rodapé);
+navy `#12215E`; margem 51pt. Supera a recomendação condicional da §5 de docs/20 (amber + Helvetica) por direção
+explícita do sponsor. Os tokens de cor/fonte ficam centralizados no topo de `pdf.ts` para troca trivial.
+
+**Implementado (docs/20 §1–§4):**
+- **Fontes embutidas no VFS do jsPDF** via `addFileToVFS`+`addFont` (`src/services/pdfFonts.ts`), com os TTF
+  base64 em `src/assets/pdfFonts.ts` (gerado por `scripts/build-pdf-fonts.mjs`). Carga **sob demanda**: `pdf.ts`
+  importa as fontes por `import()` dinâmico, já atrás do guard literal `import.meta.env.DEV` do único caller
+  (`PreviewModal.download`). Resultado: build de prod = **1 asset `index-*.js` de 234.94 kB** sem jsPDF/fontes/PDF
+  (DCE do Rollup) — peso das fontes **fora do bundle principal**, confirmado por `scripts/check-bundle.mjs` (0
+  proibidos) e pela ausência de chunk de fonte/jsPDF no dist.
+- **Fontes OFL/open** (`@fontsource/space-grotesk` + `@fontsource/geist-mono`, SIL OFL 1.1), subset `latin`
+  (cobre acentos pt-BR, verificado por probe de cmap). woff2→TTF via `wawoff2` (descompressor woff2 oficial do
+  Google). Atribuição em `src/assets/OFL.md`.
+- **Layout:** capa navy full-bleed (logo + eyebrow de perfil + título `clientName` 34pt + subtítulo 20pt com 2ª
+  palavra verde-limão + pares de dados); template interno repetível (kicker mono + título navy 17pt + faixa navy
+  de KPIs + tabelas com header-band navy e separadores `#D4D9E3`, números mono right-aligned); seções na ordem do
+  §4; contracapa "Obrigado pela oportunidade" (30pt) espelhando a capa; rodapé `pág. x/y` em todas as páginas.
+- **Confidencialidade por perfil (§3, inegociável):** mantidos os guards por PRESENÇA de campo — `if (commercial)`
+  / `if (internal && result)`. Nenhum custo/margem/COGS/tributo/fee Minu em client/commercial (não existem no
+  payload). O label interno `Platform Fee` não reaparece em commercial — o bloco de preço comercial usa
+  "Taxa de plataforma" (termo de preço), preservando o termo-gate.
+- **Contrato preservado:** `generateQuotePdf(QuoteViewPayload, QuotePdfMeta)` inalterado. Testes atualizados sem
+  afrouxar o gate: `pdf.confidentiality.test.ts` manteve os loops `INTERNAL_TERMS`/`INTERNAL_PAYLOAD_KEYS`
+  intactos; só o rótulo de conteúdo mudou (`Investimento mensal estimado` → `Resumo do investimento`).
+
+**Verificação (contagens reais, NÃO VERIFIED — gate do Guardian):**
+- typecheck `@bondly/commercial-workspace`: **PASS**
+- suíte completa do app: **PASS 139/139** (22 arquivos); testes de PDF 6/6.
+- builds de produção ×3: **PASS** determinísticos (hash idêntico `index-D42PseMA.js`, 234.94 kB).
+- `scripts/check-bundle.mjs` ×3: **PASS** (0 identificadores proibidos; sem chunk de jsPDF/fonte no bundle).
+- `npm audit --omit=dev`: **0 vulnerabilidades**.
+- **lint:** N/A — não há script `lint` nem config ESLint no repo (não é gate deste projeto).
+- `scripts/gen-sample-pdfs.mjs`: **PASS** — 3 PDFs regenerados, header `%PDF-`, fontes SpaceGrotesk+GeistMono
+  embutidas (sem fallback), verde-limão presente:
+  - `scripts/out/bondly-proposta-client.pdf` (699.247 B)
+  - `scripts/out/bondly-proposta-commercial.pdf` (712.332 B)
+  - `scripts/out/bondly-proposta-internal.pdf` (722.777 B)
+
+**ASSUMPTION:** input representativo de `gen-sample-pdfs.mjs` inalterado (tier Growth ~50k, prazo 24m, via Minu).
+**ASSUMPTION/fallback:** se o embed de fonte falhar em runtime, há fallback marcado Helvetica/Courier (sem quebrar
+a peça) — não acionado nos 3 PDFs gerados.
+**Pendências:** comparação visual lado a lado com a referência do sponsor (olho humano) e marcação VERIFIED são do
+Guardian/PRR, não deste autor.
+
+---
+
+## Revisão redesign do PDF (Quality & Security Guardian — revisão independente e adversarial)
+
+> **Revisor:** product-quality-security (Guardian). **Data:** 2026-11-05. **Escopo:** reescrita integral de
+> `apps/commercial-workspace/src/services/pdf.ts` para replicar a referência do sponsor (navy `#12215E`, verde-limão
+> `#C2FF01`, Space Grotesk + Geist Mono embutidas via `@fontsource`/OFL), spec `docs/20`. **Mudanças NÃO commitadas.**
+> **Autor:** subagente `71effad8b2b64469` (product-fullstack). **Regra §26:** só o Guardian move `FIXED → VERIFIED`.
+> **Independência (§31):** NÃO confiei no resumo do autor — reexecutei testes, build, bundle gate, audit e extraí
+> o texto real dos 3 PDFs com meu próprio grep adversarial. **AUTOR ≠ REVISOR (PL-025 §8.3):** satisfeito — o
+> código foi escrito pelo fullstack e revisado por mim (Guardian), que não o escrevi.
+
+### Veredito por item da spec/objetivo
+
+| # | Item | Status | Evidência (reexecutada pelo Guardian) |
+|---|------|:------:|---------------------------------------|
+| 1 | **Confidencialidade por perfil (o mais importante)** | **VERIFIED** | `pdf.confidentiality.test.ts` passa; tipos `quoteTypes.ts` provam que `ClientQuote` **não tem** `composition/waterfall/setup/result`; extração REAL dos 3 PDFs (ToUnicode CMap) → client/commercial **0** termos de custo/COGS/margem/fee-Minu/"Platform Fee"/"Uso interno"; internal contém. |
+| 2 | **Bundle de produção** | **VERIFIED** | `vite build` OK (1 chunk `index.js` 234.94 kB, gzip 71 kB). `check-bundle.mjs` = **0 proibidos**. Grep adversarial no `dist/`: **0** de `jspdf/addFileToVFS/addFont/SpaceGrotesk/GeistMono/SPACE_GROTESK/GEIST_MONO/generateQuotePdf/registerPdfFonts`. Nenhum base64 ≥200 chars; assinatura TTF `AAEAAA`/`R0RFR` = 0. Fontes+jsPDF DCE'd por `import.meta.env.DEV` literal em `PreviewModal.download`. |
+| 3 | **Fontes / licença / pt-BR** | **VERIFIED** | `@fontsource/space-grotesk`, `@fontsource/geist-mono`, `wawoff2` = **devDependencies** (não entram em prod). OFL 1.1 atribuído em `src/assets/OFL.md` (ambas). Acentos renderizados no PDF real: `USUÁRIOS ç ã õ á`, `COMPOSIÇÃO`, `PREÇO`, `EMISSÃO`, `ALÇADA` — subset latin cobre pt-BR. |
+| 4 | **Regressão (typecheck/suíte/build/audit)** | **VERIFIED (com nota)** | typecheck: 5/5 workspaces limpos. commercial-workspace: **139 testes passam (22 arquivos)** — bate com o autor. Com dist do engine buildado: auth-proxy **590** + engine **125** passam (total 854 verdes). `npm audit --omit=dev` = **0 vulnerabilidades (prod)**. 3 PDFs: header `%PDF-1.3`, **4 FontFile2 (TTF embutido)** em cada — fontes reais, não fallback Helvetica. |
+| 5 | **Contrato inalterado** | **VERIFIED** | `generateQuotePdf(quote: QuoteViewPayload, meta)` consome o QuoteView projetado — **não** importa o Pricing Engine (`check-bundle` prova 0 `calculate/createProposalSnapshot/cogs/...`). Guards por **presença** (`if (commercial)` / `if (internal && result)`), não por flag de audience. |
+
+### Findings
+
+- **F-PDF-01 — Teste de confidencialidade NÃO foi afrouxado · Severidade: INFO · Status: VERIFIED.**
+  `git diff pdf.confidentiality.test.ts`: as únicas mudanças trocam a string de conteúdo-positivo esperado
+  ("Investimento mensal estimado" → "Resumo do investimento", redesign §4.2). Os laços negativos
+  (`INTERNAL_TERMS`, `INTERNAL_PAYLOAD_KEYS`) estão **intactos** — o gate não foi relaxado. Conforme.
+
+- **F-PDF-02 — Rótulo "Taxa de plataforma" (commercial) é legítimo, NÃO mascara vazamento · Severidade: INFO · Status: VERIFIED.**
+  O valor em commercial vem de `CommercialQuote.composition.platformFee` — componente de **PREÇO** (parte da
+  mensalidade que o cliente paga), de uma sub-estrutura da projeção comercial. O custo interno "Platform Fee"
+  vive em `result.platformFee` (`PricingResult`), campo **ausente** de `CommercialQuote`. São campos de camadas
+  de projeção diferentes. A relabel "Taxa de plataforma" (vs o termo-gate inglês "Platform Fee", exclusivo de
+  internal) é correta: na extração real, "Platform Fee" aparece **só** no internal. Preço exibido = preço, não custo.
+
+- **F-PDF-03 — `npm audit` completo: 6 vulns DEV-only (2 CRITICAL tinypool via vitest) · Severidade: LOW (prod) · Status: OPEN (ACCEPTED RISK candidato).**
+  `tinypool` é transitiva do **vitest** (test runner) — **não shippada** (`--omit=dev` = 0). Pré-existente, **não
+  introduzida pelo redesign**. **Não** é bloqueio de Quality Gate (não está no caminho de produção). Governança
+  PL-025 §9.6 / **PQ-029** (gestão de vulnerabilidades): tratar no ciclo de deps (bump de vitest), fora desta review.
+
+- **F-PDF-04 — Botão "externo" projeta view `commercial`, nunca `client` · Severidade: LOW · Status: ADDRESSED (decisão de produto confirmada; reverificação de QA pendente).**
+  Decisão do sponsor: o PDF EXTERNO entregue ao cliente usa a view **`client`** (peça enxuta — SEM composição de
+  preço, waterfall de descontos nem alçada). Aplicado em `PreviewModal.download('external')`:
+  `projectQuotePreview('client', …)` (antes `'commercial'`). O PDF INTERNO (botão gated por audience interna /
+  `proposal.see_internal`) permanece `internal`. Regra final: **externo ⇒ `client`; interno ⇒ `internal`**. A view
+  `'commercial'` deixa de ser exercitada pela UI (segue coberta por `pdf.test.ts`). Confidencialidade intacta: nenhuma
+  view de cliente carrega `result`/COGS/margem no payload (fronteira estrutural, F-PDF-02). Novo teste em `pdf.test.ts`
+  trava que `client` é mais enxuta que `commercial` e que nenhuma expõe `result`. **product-fullstack não marca VERIFIED**
+  — a reverificação é do Guardian.
+
+### Análise de risco — matriz Minu (PL-025 §9.1.1)
+
+| Projeto | Risco (nível) | Descrição do Risco | Impactos | Ações de Contorno |
+|---------|---------------|--------------------|----------|-------------------|
+| Bondly/PDF | **Baixo** (Impacto Alto × Prob. Muito Baixa) | Vazamento de custo/margem em peça externa via redesign | Exposição de COGS/margem/fee-Minu a cliente (LGPD/comercial) | Fronteira **estrutural** (campo ausente do payload) + gate `pdf.confidentiality.test.ts` + extração real 0-hits. Mitigado. |
+| Bondly/PDF | **Baixo** (Impacto Médio × Prob. Muito Baixa) | Peso de fonte (~104KB) vaza ao bundle de prod | Regressão de performance/bundle | DEV-gate literal + `check-bundle.mjs` (0) + grep dist (0). Mitigado. |
+| Bondly/PDF | **Baixo** (Impacto Baixo × Prob. Baixa) | CRITICAL tinypool (dev) escalar a prod | Nenhum no caminho de prod (devDep) | `--omit=dev`=0; acompanhar bump de vitest (PQ-029). |
+
+### NÃO VERIFICADO (fora do alcance técnico desta review)
+
+- **Fidelidade visual pixel-a-pixel** com a referência do sponsor (coordenadas/cores batem no código e nos streams,
+  mas a conferência de olho humano lado-a-lado é do sponsor/PRR). O CMap ToUnicode decodifica limpo os textos mono
+  em caixa-alta (eyebrows/kickers), mas os textos mixed-case em Space Grotesk têm cmap parcial — a legibilidade
+  final renderizada deve ser confirmada abrindo os 3 PDFs num viewer.
+- **ADR (PL-025 §9.1.1/§9.2.2):** a decisão de marca (verde-limão vs amber do DS, Space Grotesk+Geist Mono, navy da
+  peça) está registrada em `docs/20 §6` como direção do sponsor, mas **não há ADR formal** na base de ADRs. Dependência
+  a registrar pelo `product-fullstack`/`product-orchestrator` (não bloqueia este veredito de QA).
+
+```
+QUALITY STATUS
+APPROVED WITH CONDITIONS
+
+Findings:
+  - F-PDF-01 (INFO/VERIFIED) teste de confidencialidade não afrouxado.
+  - F-PDF-02 (INFO/VERIFIED) "Taxa de plataforma" = preço, não vazamento de custo.
+  - F-PDF-03 (LOW-prod/OPEN) 2 CRITICAL tinypool são DEV-only (vitest), pré-existentes, não shippadas.
+  - F-PDF-04 (LOW/ADDRESSED) botão externo agora usa view 'client' (externo⇒client, interno⇒internal); reverificação de QA pendente.
+
+Evidence:
+  - typecheck 5/5 OK; commercial-workspace 139 testes OK; engine 125 + auth-proxy 590 OK (dist buildado).
+  - vite build OK (1 chunk 234.94kB); check-bundle 0 proibidos; grep dist 0 de jspdf/fonts/base64.
+  - 3 PDFs %PDF-1.3, 4 FontFile2 embutidos; extração ToUnicode: client/commercial 0 termos sensíveis, internal contém.
+  - @fontsource/* + wawoff2 = devDeps; OFL.md presente; acentos pt-BR renderizam; audit --omit=dev = 0.
+
+Required Actions (condições para GO pleno):
+  1. Conferência visual lado-a-lado dos 3 PDFs (sponsor/PRR) — único NÃO VERIFICADO relevante.
+  2. [ADDRESSED] F-PDF-04 decidido: PDF do cliente final = 'client'. Aplicado; reverificação de QA pendente.
+
+Recommended Actions:
+  3. Registrar ADR da decisão de marca/tipografia (PL-025 §9.1.1).
+  4. Planejar bump de vitest p/ zerar tinypool no caminho dev (PQ-029) — fora desta entrega.
+  5. No CI, buildar dist do @bondly/pricing-engine ANTES dos testes do auth-proxy (o `npm run test` agregado falha
+     11 arquivos por 'Failed to resolve entry @bondly/pricing-engine' — dist gitignorado, test-antes-de-build; NÃO é
+     regressão do redesign).
+```
+
+**Pode o redesign do PDF ser VERIFIED?** Os dois eixos críticos do objetivo — **fronteira de confidencialidade por
+perfil** (item 1) e **fontes fora do bundle de produção** (item 2) — estão **VERIFIED** por reexecução e extração
+real, não por confiança no autor. O veredito global é **APPROVED WITH CONDITIONS**: a única pendência verdadeiramente
+aberta é a conferência visual humana (fora do alcance automatizável); F-PDF-04 foi ADDRESSED (externo⇒`client`). Nenhum bloqueio
+de Quality Gate (§23): sem vuln CRITICAL/HIGH no caminho de prod, sem teste falhando no escopo, build íntegro, sem
+segredo exposto, sem falha de authorization, sem risco de corrupção de dados.
+
+---
+
+## Reverificação F-PDF-04 — Guardian (2026-11-05)
+
+**Escopo:** revalidar POR EXECUÇÃO o fix do autor (subagente 09ffa28cad47fec3): botão de PDF externo passa a
+projetar a view `client` (enxuta), não `commercial`; botão interno continua `internal`. Mudanças não commitadas.
+Independência adversarial: nada aceito por auto-relato — tudo reexecutado/extraído. Toplevel confirmado
+(`git rev-parse --show-toplevel` = bondly-commercial-platform, remotes origin=Bondly_Simulator, sim2).
+
+**QUALITY STATUS: APPROVED WITH CONDITIONS** — F-PDF-04 pode ser **FECHADO (VERIFIED)**. Redesign do PDF: os dois
+eixos de risco (fronteira de confidencialidade por perfil + fontes/engine fora do bundle de prod) seguem VERIFIED;
+o redesign permanece **APPROVED WITH CONDITIONS** — única pendência verdadeiramente aberta é a conferência visual
+humana (não automatizável), não um defeito.
+
+### Findings
+- **F-PDF-04 (LOW) OPEN → VERIFIED.** Regra confirmada por leitura E execução: externo⇒`client`, interno⇒`internal`.
+  - `PreviewModal.tsx`: `download('external')` → `kind==='internal' ? 'internal' : 'client'` ⇒ externo projeta `client`;
+    botão "Gerar PDF interno" gated por `{internal && ...}` (audience interna do `useAudience()`), chama `download('internal')`.
+    Não há caminho em que usuário externo gere `commercial` ou `internal`.
+  - **Dupla fronteira estrutural:** (1) `projectQuotePreview`/`projectQuote`: view `client` retorna só `{...base, view:'client', discounts:{tierRate,termRate}}`
+    — SEM composition/waterfall/discountCorridor/setup-detalhado/engagement/policy/result; (2) renderizador `pdf.ts`:
+    `commercial = view!=='client' ? quote : null` e `result = view==='internal' ? quote.result : null` ⇒ payload client
+    não tem de onde renderizar seção interna. Docstring: nenhum parâmetro de audience força interno sobre payload externo.
+- **F-PDF-NOTE (observação):** o binding UI `external⇒client` é coberto por INSPEÇÃO de código, não por teste automatizado
+  (os testes exercitam `projectQuote(view)` diretamente, não o clique do botão). Recomendável um teste de componente
+  do PreviewModal. Não bloqueia — a fronteira estrutural garante confidencialidade mesmo sem esse teste.
+- **F-PDF-03 (dev-only, pré-existente):** `npm audit` completo = 6 vulns (2 critical tinypool/vitest, 1 high vite, 3 moderate)
+  — TODAS na cadeia Vitest/Vite/esbuild (devDependencies, não shippadas). `npm audit --omit=dev = 0`. Não introduzidas
+  pelo F-PDF-04. Gestão segue PQ-029 (bump de vitest fora desta entrega). Não bloqueia o Quality Gate.
+
+### Evidence (reexecução real)
+- **Build dist antes de tudo** (gotcha): `build @bondly/pricing-engine` OK, `build @bondly/auth-proxy` OK.
+- **Typecheck 5/5 workspaces OK** (pricing-catalog, pricing-engine, pricing-types, auth-proxy, commercial-workspace).
+- **Suíte completa 855/855 OK:** engine 125 (9 files) + commercial-workspace 140 (22 files) + auth-proxy 590 (18 files).
+  Confere com o alegado pelo autor.
+- **Testes de PDF isolados:** `pdf.test.ts` 4/4 + `pdf.confidentiality.test.ts` 3/3 = 7/7 OK. Novo teste F-PDF-04 trava
+  `client.composition/waterfall/discountCorridor === undefined`, `commercial.*` definido, `client.result`/`commercial.result === undefined`.
+  Loops `INTERNAL_TERMS` (6 regex) e `INTERNAL_PAYLOAD_KEYS` (9 chaves, inclui `"result"`) **intactos, não afrouxados**.
+- **3 PDFs de amostra regenerados** (`scripts/out/`, via `projectQuote` de PRODUÇÃO do dist auth-proxy): %PDF- válido,
+  client 699KB < commercial 712KB < internal 722KB.
+- **Extração do texto REAL renderizado** (intercept `doc.text`, caminho de produção `projectQuote`):
+  - `client`: keys sem composition/waterfall/discountCorridor/result; 0 chaves sensíveis no payload; 0 termos internos no texto.
+  - `commercial`: tem composition/waterfall/discountCorridor; 0 chaves sensíveis; 0 termos internos no texto.
+  - `internal`: payload com result/costs/technicalMargin/netMargin/minuConversionFee/premisesHash/tcvBondly/setupNet;
+    texto com COGS/Custo variável/Margem técnica/Platform Fee/Fee Minu/Composição da mensalidade/USO INTERNO.
+  ⇒ client = peça enxuta (sem composição de preço/alçada); client+commercial sem custo/margem/COGS/fee Minu; internal mantém breakdown.
+- **3 builds OK** (engine tsc, auth-proxy tsc, commercial-workspace tsc+vite — 457 módulos, chunk 234.94KB).
+- **Bundle gate:** `check-bundle.mjs` = "OK: 1 asset verificado, 0 identificador proibido".
+- **`npm audit --omit=dev` = 0 vulnerabilidades** (prod-path limpo).
+
+### NÃO VERIFICADO
+- Conferência visual lado-a-lado dos 3 PDFs por humano (sponsor/PRR) — fora do alcance automatizável.
+- Binding `external⇒client` no clique do botão não tem teste de componente (coberto por inspeção + fronteira estrutural).
+
+### Required Actions
+- Nenhuma de bloqueio. F-PDF-04 FECHADO (VERIFIED). Decisão de produto (cliente final = `client`) aplicada e reverificada.
+
+### Recommended Actions
+1. Adicionar teste de componente do `PreviewModal` cobrindo `external⇒client` e `internal⇒internal` (fecha F-PDF-NOTE).
+2. Conferência visual humana dos 3 PDFs antes do GO pleno (Required já listado na seção anterior do docs/14).
+3. Planejar bump de vitest p/ zerar tinypool/vite no caminho dev (PQ-029) — fora desta entrega.
+
+**Governança Minu:** sem violação de PL-025 §9.2.1 (sem segredo no repo; bundle gate 0; audit prod 0). TDD/testes de
+confidencialidade presentes e não afrouxados (§13). Autor≠revisor respeitado (autor = subagente 09ffa28cad47fec3;
+revisão independente = Guardian). Vulns dev-only seguem PQ-029 (dependência, não bloqueio).

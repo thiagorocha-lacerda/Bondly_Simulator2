@@ -17,6 +17,8 @@
 | [11 — SLA técnico](./11-sla-tecnico.md) | SLA de 5 dias úteis e reunião técnica | operacional |
 | [12 — Auditoria de completude e deploy AWS](./12-auditoria-completude-deploy-aws.md) | Checklist de lacunas, evidências, env vars | operacional |
 | [13 — Deploy manual na AWS](./13-deploy-aws-manual.md) | Runbook: build, env, TLS, persistência SQLite, smoke, rollback, backup | operacional |
+| [20 — Spec visual do PDF](./20-spec-visual-pdf.md) | Layout/paleta/tipografia da peça comercial; §5 divergência DS×referência | design |
+| [21 — ADR: identidade visual do PDF](./21-adr-identidade-visual-pdf.md) | Decisão do sponsor: PDF verde-limão + Space Grotesk/Geist Mono diverge do app (amber) | decisão/marca |
 
 Documentação de testes (23.13) em `packages/pricing-engine/README.md`.
 
