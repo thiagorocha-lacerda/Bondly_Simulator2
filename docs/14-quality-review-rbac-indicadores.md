@@ -1008,3 +1008,134 @@ este fix: segue `4cff5797` (o fix é no código de leitura, não na tabela; a ta
 **ASSUMPTION:** não há `ProposalSnapshot` persistido do schema antigo hoje (backend recalcula com
 `CURRENT_PREMISES`) — o fix é forward-compat preventivo, não correção de dado corrompido. **NÃO
 VERIFICADO:** nada novo fora do escopo dos dois findings. Sem commit/push (ação do usuário).
+
+## Resposta do autor (Fase 4 — PDF por perfil + E2E) — product-fullstack, 2026-11-05 — **IMPLEMENTADO-PENDENTE-REVISÃO**
+
+Fecha as duas condições abertas da Fase 4 (A4/gate de bundle já estava FEITO — não refeito). **Não marco VERIFIED** — isso é do Guardian. Sem commit/push/AWS.
+
+**PDF por perfil (QuoteView, não engine) — DECISION.** `apps/commercial-workspace/src/services/pdf.ts` foi REESCRITO: a função pública passou de `generateProposalPdf(snap: ProposalSnapshot, audience)` para `generateQuotePdf(quote: QuoteViewPayload, meta)`. O PDF agora é montado a partir do **QuoteView projetado pelo servidor** (`client`/`commercial`/`internal`) — a MESMA fonte das telas (`useCentralPricing`/`adaptQuote`) —, **sem importar `@bondly/pricing-engine` nem `loadDevEngine`**. A audience é DERIVADA da `view` (internal⇒peça completa; client/commercial⇒peça do cliente). A fronteira de confidencialidade ficou **ESTRUTURAL**: a peça externa nasce de um payload que **não contém** custo/COGS/margem/tributo/fee Minu — não há de onde vazar, independente do gerador "lembrar" de esconder.
+- **Acoplamento removido:** o `loadDevEngine()` (ARKA) e o consumo de `ProposalSnapshot`/`createProposalSnapshot` saíram do `pdf.ts`. A seção ARKA foi removida do PDF interno — **ARKA não está no contrato `quote.v1`** (classificação vive no engine, `arkaClassification`); o breakdown interno vem de `quote.result` (PricingResult projetado só na view `internal`). **ASSUMPTION:** ARKA no PDF interno fica como follow-up (precisaria o servidor projetar a classificação no payload); não reintroduzi o engine só por isso.
+- **Preview (DEV):** `PreviewModal.tsx` agora projeta o QuoteView em DEV via `projectQuotePreview` (novo helper DEV-only em `devEngine.ts`, espelho de `quoteProjection.ts`, campos travados por `quoteTypes.sync.test.ts`) e chama `generateQuotePdf`. Em produção o payload vem do fio. Todo o caminho segue DEV-gated+DCE'd: **o chunk jsPDF nem aparece no `dist` de produção**.
+- **Testes de confidencialidade (3 perfis):** `pdf.confidentiality.test.ts` reescrito — intercepta `doc.text` (mock jsPDF) E varre o próprio payload JSON. Prova: `client` e `commercial` (business/approver) sem termo interno no texto **e** sem chave interna (`costs`/`taxes`/`technicalMargin`/`"result"`/…) no payload; `internal` (tech/admin) contém o breakdown. `pdf.test.ts` migrado para a nova assinatura.
+
+**E2E cotação→proposta→emissão — FEITO.** `scripts/smoke-e2e-quote-proposal.mjs` (+`npm run smoke:e2e`), padrão smoke-quote/smoke-sla: auth-proxy REAL buildado + SQLite em `DATA_DIR` efêmero (limpo no `finally`), bootstrap admin, perfis via API, cookies de sessão. Exercita: (A) cotação por perfil no fio (business⇒`commercial` sem custo; tech⇒`internal` com breakdown); (B) criação de proposta + **reconciliação cotação=proposta** (quote por `{input}` == quote por `{proposalId}` no `pricing` público); (C) jornada feliz margem saudável submeter→análise→aprovar técnico→consolidar→emitir (200, sem exceção); (D) G-026 em margem abaixo do piso. **Resultado: 27/27 PASS.**
+- **CONFLICT (informativo, não-bug) — premissa da tarefa vs código.** A tarefa afirmava "G-026 server-side existe mas `emitir` ainda não o consulta — não implemente, só documente". **O código atual JÁ consulta G-026 na emissão:** `api.ts` (~l.715) roda `emissionGate` quando `decision.to` é `pronto_para_emissao` (consolidar) **OU** `emitido` (emitir) — defesa em profundidade, confirmada por `emissionGuard.test.ts` ("emitir também é protegido"). Não é regressão nem bug: é o gate **mais** forte do que a premissa supunha. O E2E ASSERTA o comportamento REAL (sem falso verde): consolidar sem exceção ⇒ 409; com exceção aprovada ⇒ consolidar 200 e emitir 200. **Nada novo de G-026 foi implementado.**
+
+**Verificação (execução real, 2026-11-05):** typecheck **PASS** (5 workspaces) · suíte completa **PASS 854** — pricing-engine **125/9**, commercial-workspace **139/22** (inclui `pdf.test.ts` 3, `pdf.confidentiality.test.ts`, `PreviewModal.failure.test.tsx`), auth-proxy **590/18** · **3× build PASS** (dist comercial 234,94 kB) · bundle gate `scripts/check-bundle.mjs` **PASS (0 proibidos)** — o `pdf.ts` baseado em QuoteView **não** reintroduz `calculate`/`cogs`/`CURRENT_PREMISES`/engine · `npm audit --omit=dev` **0 vulnerabilidades** · **E2E `smoke-e2e-quote-proposal.mjs` 27/27 PASS**.
+
+**NÃO VERIFICADO / pendências honestas:** (1) **render visual** do PDF por perfil (os testes são estruturais sobre o texto/dados escritos, não um PDF aberto a olho) — recomendo validação visual na tela antes do PRR. (2) **ARKA no PDF interno** removida (follow-up: projetar a classificação no `quote.v1` se exigida na peça interna). (3) G-026 **não** foi tocado (fora de escopo). (4) `VERIFIED` e PRR são do Guardian. Sem commit/push/AWS (ação do usuário).
+
+---
+
+## Revisão Fase 4 (PDF + E2E + G-026) — product-quality-security (Guardian), 2026-11-05 — **independente e adversarial**
+
+Revisão da FASE 4 do G-001 sobre as mudanças NÃO commitadas (branch `main`, repo `bondly-commercial-platform`). Resumo do autor (subagente `4699cc008ebf0d1e`) NÃO foi tomado como verdade — **tudo revalidado por execução**. Nenhum código foi corrigido nesta run. Sem commit/push/AWS. **Só o Guardian move FIXED → VERIFIED.**
+
+### Evidência de execução (reproduzível)
+- **Typecheck:** `npm run typecheck` ⇒ **PASS nos 5 workspaces** (pricing-catalog, pricing-types, pricing-engine, auth-proxy, commercial-workspace). Exit 0.
+- **Build:** `npm run build` ⇒ **PASS** — pricing-engine (tsc), auth-proxy (tsc), commercial-workspace (tsc --noEmit && vite build). Bundle de prod único `dist/assets/index-D42PseMA.js` = **234,94 kB** (gzip 71,04 kB); **nenhum chunk jsPDF/engine separado** emitido. Exit 0.
+- **Suíte completa:** `npm test` ⇒ **854 testes PASS** — pricing-engine **125/9 arquivos**, commercial-workspace **139/22**, auth-proxy **590/18**. **Contagens batem 1:1 com o auto-reporte do autor (854).** Exit 0.
+- **E2E real:** `node scripts/smoke-e2e-quote-proposal.mjs` ⇒ **27/27 PASS** contra o auth-proxy REAL buildado (NODE_ENV=production, SQLite em `DATA_DIR` efêmero). Dir efêmero (`e2e-quote-proposal-*`) **removido** no `finally` — confirmei que não sobrou lixo no repo nem no scratch. Exit 0.
+- **Bundle gate:** `node scripts/check-bundle.mjs` ⇒ **PASS, 0 identificadores proibidos** no `dist` de prod. Confirmei por grep independente: `calculate|CURRENT_PREMISES|cogs|createProposalSnapshot|arkaClassification|runB2c|defaultScenarios|taxRate|normalizeB2cInput|serviceCompCap|validateTierDiscountPct|platformFeeBands|tierFor` = **0 ocorrências**. **`jsPDF` = 0 no bundle de prod** (todo o caminho PDF é DEV-gated via `if (import.meta.env.DEV)` em `devEngine.ts` e DCE'd pelo Rollup — confirmado).
+- **Dependências:** `npm audit --omit=dev` (caminho de PRODUÇÃO) ⇒ **0 vulnerabilidades**.
+
+---
+
+### Item 1 — PDF por perfil / confidencialidade ESTRUTURAL → **VERIFIED**
+
+**Parecer:** a fronteira de confidencialidade do PDF é **estrutural**, não cosmética, e está correta.
+- `apps/commercial-workspace/src/services/pdf.ts` consome `QuoteViewPayload` e **NÃO importa** `@bondly/pricing-engine` nem `loadDevEngine` para calcular — só formata o que o servidor projetou. Confirmado por leitura e pelo bundle gate (0 símbolos do engine). `import type { jsPDF }` é type-only (apagado no build); o `import('jspdf')` runtime vive no caminho DEV e não entra no `dist` de prod.
+- `pdf.confidentiality.test.ts` prova nos **3 perfis** (client/commercial/internal): varre o TEXTO renderizado (mock de `doc.text`) **e** o PAYLOAD JSON de origem — `client`/`commercial` não contêm `costs`/`taxes`/`technicalMargin`/`netMargin`/`tcvBondly`/`setupNet`/`premisesHash`/`minuConversionFee`/`"result"` nem termos internos; `internal` contém o breakdown. **PASS** na suíte.
+- Reforço no fio (E2E): `business` ⇒ view `commercial` **sem** custo/margem (`!LEAK.test` no texto bruto da resposta HTTP, PASS); `tech` ⇒ `internal` com `costs.total>0`. A projeção de PRODUÇÃO (servidor) é exercida pelo E2E; o teste de PDF exercita o ESPELHO DEV (`projectQuotePreview`), cujos campos são travados contra o SOURCE do servidor por `quoteTypes.sync.test.ts` — cadeia de prova íntegra.
+
+### Item 2 — G-026 / gate de emissão por margem → **VEREDITO EXPLÍCITO: EFETIVO HOJE. G-026 NÃO é mais pendência.**
+
+**A correção de premissa do autor está CORRETA e confirmada por código + execução adversarial.** A emissão (transição → `emitido`) **JÁ é gated** por `emissionGate`; não é só a consolidação.
+
+Prova (código, `apps/auth-proxy/src/api.ts` l.716): `if (decision.to === 'pronto_para_emissao' || decision.to === 'emitido') { const gate = emissionGate({...}); if (!gate.ok) return json(409, ...) }`. O gate lê `commercial` (inputs PERSISTIDOS), `requests` e `audit` do repositório — **nunca** de flag do cliente.
+
+Teste adversarial (executei; todos PASS no E2E e em `emissionGuard.test.ts`, que roda via `handleApi` em memória **e** SQLite):
+- **Emitir com margem abaixo do piso (REPRECIFICAR) e SEM exceção aprovada ⇒ bloqueado** (409 `approval_required`). ✔
+- **Pular consolidar e emitir direto ⇒ bloqueado** pela FSM (`canTransition`: `emitir` só é válido de `pronto_para_emissao`; de `aprovado_tecnicamente` ⇒ 409 `transition_invalid_from`). Não há atalho de estado. ✔
+- **Exceção REJEITADA e emitir ⇒ bloqueado;** só a ÚLTIMA `excecao_comercial` `approved` libera. ✔
+- **Exceção de OUTRO kind (`alteracao_escopo`) aprovada ⇒ NÃO libera** (o gate filtra `kind === 'excecao_comercial'`). ✔
+- **Aprovar e depois EDITAR material ⇒ reabre:** `invalidationOnEdit` devolve a proposta à reanálise (volta a `aguardando_analise_tecnica`/`em_analise_tecnica`) e o gate detecta `proposal.edit_commercial` posterior à aprovação na auditoria ⇒ volta a bloquear. ✔ (teste "MUDANÇA MATERIAL invalida a aprovação")
+- **Edição NÃO material após aprovar ⇒ também re-bloqueia** (a margem pode ter mudado; a aprovação só vale para a versão decidida). ✔
+- **Flag do cliente (`requiresApproval:false`, `marginStatus:'SAUDÁVEL'`) ⇒ ignorada;** o alerta vem dos inputs persistidos. ✔
+- **Fail-closed:** inputs legados `{}` liberam por padrão, mas `PRICING_GUARD_STRICT` ⇒ 409 `pricing_inputs_incomplete`. ✔
+
+**Conclusão:** **NÃO existe caminho de emitir com margem abaixo do piso sem aprovação válida.** G-026 passa de condicional para **VERIFIED (efetivo em defesa em profundidade)**.
+
+### Item 3 — E2E cotação→proposta→emissão → **VERIFIED**
+
+`scripts/smoke-e2e-quote-proposal.mjs` **27/27 PASS** (real, não mock). Verifiquei que **não dá falso-verde**:
+- Reconciliação **cotação = proposta** é assertada por igualdade do `pricing` público (`pricingOf(byInput) === pricingOf(byProposal)`) — mesma fonte persistida, nada recalculado no cliente. ✔
+- G-026 assertado pelo **comportamento REAL** (consolidar sem exceção ⇒ 409; com exceção aprovada ⇒ consolidar 200 e emitir 200), não por uma expectativa frouxa. ✔
+- Log estruturado **sem valores de preço** (`!/"users":50000|extraDiscount|"monthly":/` e presença de `pricing_quote`). ✔
+- **Limpeza** do dir efêmero no `finally` confirmada (sem leftovers). ✔
+
+### Item 4 — Regressão → **VERIFIED** (ver Evidência de execução acima)
+Typecheck 5/5 · 854 testes · 3 builds · bundle gate 0 · `npm audit --omit=dev` 0. Tudo verde e reproduzido por mim.
+
+### Item 5 — Pendências honestas
+- **Render VISUAL do PDF — NÃO VERIFICADO (correto do autor).** Os testes são estruturais (texto/dados escritos), não abrem o PDF a olho. **Recomendação (não bloqueia o gate, bloqueia o PRR):** validação visual na tela dos 3 perfis antes do deploy. É validação de aparência, não de confidencialidade (esta já é estrutural).
+- **ARKA removida do PDF interno — aceitável como follow-up (LOW), NÃO regressão de confidencialidade.** ARKA não está no contrato `quote.v1`; reintroduzi-la exigiria o engine no cliente (contra o G-001) OU o servidor projetar a classificação no payload. A peça do CLIENTE nunca teve ARKA; só a peça INTERNA perdeu uma seção informativa. Severidade **LOW** — perda funcional menor na peça interna, endereçável projetando ARKA no `quote.v1` quando exigida.
+
+---
+
+### Findings novos
+
+**F-04 — Bundle gate não cobre tokens de ESTRUTURA DE CUSTO (`costs`/`cleverTap`/`infra`/`taxes`) — Severidade: LOW (INFO) — Status: OPEN**
+- **Componente:** `scripts/check-bundle.mjs` (lista `FORBIDDEN`).
+- **Descrição/Evidência:** grep independente no `dist` de prod achou `cleverTap` 3× e `CleverTap` 1×. Inspecionados: (1) `costs:{cleverTap:0,...}` — SENTINELA ZERADA do `quoteAdapter.shellFrom`; (2) `const Dp={cleverTap:0,...}` — constante `ZERO_COSTS` (tudo 0); (3) label de UI `"Custo variável"/"CleverTap "` + `t.costs.cleverTap` no render interno do `ResultsDashboard`. **Nenhum é um VALOR de custo hard-coded** — os números só chegam do servidor na view `internal` (RBAC-gated); client/commercial recebem 0 por construção (`hasInternal:false`).
+- **Impacto:** nulo para confidencialidade (a fronteira é o servidor, provada pelo E2E `!LEAK`). O risco é de **regressão futura**: se alguém reintroduzisse cálculo de custo no cliente usando esses nomes de campo, o gate NÃO acusaria. Mesma categoria do `platformFeeTable` já documentada (CONFLICT A4) — colisão nome-de-campo × nome-de-tabela.
+- **Recomendação:** acrescentar ao gate um padrão que distinga VALOR de custo de LABEL/sentinela (ex.: proibir `costs:\{[^}]*[1-9]` ou os identificadores do engine que PRODUZEM custo — já cobertos por `cogs`/`calculate`). Não bloqueia; endurecimento preventivo. **Responsável:** product-fullstack.
+
+**F-05 — Vulnerabilidades DEV-ONLY no toolchain de teste (vitest/vite/esbuild/tinypool) — Severidade: MEDIUM (dev-only; NÃO shippado) — Status: OPEN (tracking PQ-029)**
+- **Evidência:** `npm audit` completo = 6 vulns (2 CRITICAL, 1 HIGH, 3 MODERATE). Todas transitam de `vitest@2.1.9`/`vite`/`esbuild`/`tinypool@1.1.1` (devDependencies). `npm ls tinypool` ⇒ `@bondly/auth-proxy → vitest@2.1.9 → tinypool@1.1.1`. **`npm audit --omit=dev` = 0** — nada atinge o runtime de produção (bundle comercial nem o server auth-proxy).
+- **Impacto:** superfície de CI/dev (prototype pollution → RCE em worker do test runner). Não embarca em produção. Risco Minu: Impacto Médio (reversível, custo baixo) × Prob. Baixa ⇒ **nível MEDIUM**.
+- **Recomendação (PQ-029 + lição retida):** bump DELIBERADO de vitest para linha corrigida e **re-rodar a suíte completa + smoke E2E** (NÃO `npm audit fix --force` cego — é um major breaking). Não bloqueia este gate. **Responsável:** product-fullstack.
+
+### Análise de risco (matriz Minu — PL-025 §9.1.1)
+| Projeto | Risco (nível) | Descrição do Risco | Impactos | Ações de Contorno |
+|---|---|---|---|---|
+| Bondly | **G-001/G-026 — RESOLVIDO** (Impacto Alto × Prob. **Muito baixa** residual ⇒ nível Baixo) | Vazamento de custo/margem ao cliente / emissão abaixo do piso sem aprovação | CWE-200/602; perda de margem por emissão indevida | Cálculo server-only + projeção por perfil + bundle gate + emissionGate em consolidar E emitir (defesa em profundidade). **Eliminado na implementação.** |
+| Bondly | **F-05 toolchain (Médio)** = Impacto Médio × Prob. Baixa | CVEs CRITICAL/HIGH em vitest/vite/tinypool (dev) | RCE no ambiente de CI/dev; não atinge produção | Bump deliberado de vitest + re-rodar suíte (PQ-029). Não shippado. |
+| Bondly | **F-04 gate de bundle (Baixo)** = Impacto Baixo × Prob. Muito baixa | Gate não cobre tokens de estrutura de custo | Regressão futura de custo no cliente passaria silenciosa | Endurecer `FORBIDDEN` com padrão de VALOR de custo. |
+
+**Dependências de política (NÃO inventadas):** PQ-029 (gestão de vulnerabilidades) rege o tratamento de F-05 — conteúdo não está em mãos, sinalizado como dependência. PL-026 (log/privacidade) — o E2E prova log sem valores de preço (✔ alinhado ao princípio, política completa pendente). ADR: a decisão "PDF por QuoteView, sem engine, fronteira estrutural" É uma decisão arquitetural com mitigação de risco (§9.1.1/§9.2.2) — **registrar como ADR no Notion** (hoje vive só em docs/15; Finding de governança já aberto em rodadas anteriores, mantido).
+
+---
+
+### NÃO VERIFICADO (honestidade)
+1. **Render visual do PDF** (3 perfis) — só estrutural; validar na tela antes do PRR.
+2. **Scans CI em pipeline real** (SAST/secret scan/container scan rodando no GitHub Actions) — validei local; não observei uma execução do workflow no CI.
+3. **ARKA no PDF interno** — removida; não reintroduzida (follow-up LOW).
+4. **Findings de PRODUTO G-002/G-004/G-005/G-006** — fora do escopo desta revisão de Fase 4; permanecem como registrados nas seções anteriores.
+5. **PRR completa** (secrets configurados no painel, migrations/backup validados em staging, rollback, monitoring) — não executada aqui.
+
+### O que ainda falta para PRODUÇÃO
+- **PRR (Production Readiness Review)** formal: CI verde no GitHub (não só local), secrets no painel do Render, healthcheck, monitoring/observabilidade, estratégia de rollback, backups validados, separação dev/homolog/prod (PL-025 §9.2.5/§9.2.6/§9.7).
+- **Validação visual do PDF** por perfil.
+- **Remediação de F-05** (toolchain dev) sob PQ-029.
+- **Findings de produto** G-002/G-004/G-005/G-006 conforme suas seções.
+- **ADR no Notion** para a decisão G-001-A (governança §9.1.1/§9.2.2).
+
+---
+
+### Marcação de status
+- **Fase 4 (PDF por perfil + E2E + bundle gate no CI): VERIFIED.** Os 2 entregáveis abertos (PDF por QuoteView; E2E da jornada) foram implementados, revalidados por execução independente, e passam. Confidencialidade estrutural e G-026 efetivo provados adversarialmente.
+- **G-001 COMPLETO: VERIFIED** quanto à ELIMINAÇÃO DA CLASSE DE RISCO (cálculo server-only, engine/custos fora do bundle de prod provado por gate, PDF sem engine, emissão gated). A marcação de **produção** permanece condicionada ao **PRR** e à validação visual — ver "O que ainda falta para produção".
+- **G-026: VERIFIED** (efetivo hoje; deixa de ser pendência).
+
+## QUALITY STATUS: **APPROVED WITH CONDITIONS**
+
+**Aprovado:** Fase 4, G-001 (classe de risco eliminada) e G-026 (gate de emissão efetivo) estão VERIFIED por execução independente. Não há bloqueio técnico: sem CRITICAL/HIGH no caminho de produção, build ok, 854 testes + E2E 27/27 verdes, secret/engine fora do bundle, emissão fail-closed por margem.
+
+**Condições (antes do deploy / PRR):** (1) validação VISUAL do PDF por perfil; (2) CI verde no GitHub (observar o workflow, não só local); (3) remediar F-05 (bump deliberado de vitest sob PQ-029); (4) registrar ADR do G-001-A no Notion; (5) endurecer o bundle gate (F-04, não bloqueante); (6) PRR formal (secrets/rollback/backup/monitoring/separação de ambientes).
+
+**Required Actions:** nenhuma que bloqueie o merge destas mudanças (o conteúdo da Fase 4 está correto e verificado). As condições acima são para o **deploy de produção**, não para aceitar a Fase 4.
+
+**Recommended Actions:** F-04, F-05, ADR, validação visual, PRR — nesta ordem de preparação para produção.
+
+> **Autorreview:** esta revisão foi feita pelo Guardian sobre código de OUTRO autor (product-fullstack). AUTOR ≠ REVISOR respeitado (§8.3/§13). Nenhum código foi escrito/alterado por mim nesta run.

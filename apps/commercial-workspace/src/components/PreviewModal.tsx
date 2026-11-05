@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { PricingInput, B2cInput, ModuleId, ProposalSnapshot } from '@bondly/pricing-types';
 import { brl } from '../services/defaults';
 import { useAudience } from '../app/audience';
-import { loadDevEngine } from '../services/pricing/devEngine';
+import { loadDevEngine, projectQuotePreview } from '../services/pricing/devEngine';
 
 /** Formata o identificador BONDLY-2027-NNNNNN sem depender do engine (função trivial pura). */
 function formatProposalId(sequence: number, year = 2027): string {
@@ -101,16 +101,31 @@ export function PreviewModal(props: {
     try {
       const n = peekNextSequence();
       const id = formatProposalId(n);
-      // G-001: engine + gerador de PDF carregados por import dinâmico SOMENTE em DEV (fora do bundle de produção).
+      // G-001 Fase 4: o PDF é montado a partir do QuoteView PROJETADO POR PERFIL (a mesma fonte das telas),
+      // NÃO de um ProposalSnapshot do engine. Em DEV projetamos localmente (projectQuotePreview, espelho do
+      // servidor); em produção o QuoteView vem do fio. `kind` decide a view: internal ⇒ 'internal', external ⇒
+      // 'commercial' (peça do cliente — sem custo/margem, que não existem no payload). O gerador NÃO toca o engine.
       const eng = await loadDevEngine();
-      const { generateProposalPdf } = await import('../services/pdf');
       const snap = eng.createProposalSnapshot({
         id,
         input: props.input,
         ...(props.b2cInput ? { b2cInput: props.b2cInput } : {}),
         ...(props.selectedModules ? { selectedModules: props.selectedModules } : {}),
       }) as unknown as ProposalSnapshot;
-      const doc = await generateProposalPdf(snap, kind);
+      const view = projectQuotePreview(
+        kind === 'internal' ? 'internal' : 'commercial',
+        snap.result,
+        snap.input.negotiation.term,
+        snap.scenarios.map((s) => ({ name: s.name, result: s.result })),
+      );
+      const { generateQuotePdf } = await import('../services/pdf');
+      const doc = await generateQuotePdf(view, {
+        id,
+        issuedAt: snap.issuedAt,
+        ...(props.input.arka?.clientName?.trim() ? { clientName: props.input.arka.clientName } : {}),
+        ...(props.selectedModules ? { selectedModules: props.selectedModules } : {}),
+        users: props.input.volume.users,
+      });
       const suffix = kind === 'internal' ? '-INTERNO' : '';
       doc.save(`${snap.id}${suffix}.pdf`);
       commitSequence(n); // consome o número só agora, após sucesso

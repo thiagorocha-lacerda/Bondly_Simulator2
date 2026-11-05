@@ -73,8 +73,9 @@ POST /api/pricing/quote              → 200 { quote: QuoteView }
 - [x] dashboard/resumo/pré-visualização consomem `QuoteView` via `useCentralPricing` (um cálculo, várias visões). Engine/tabelas de custo fora do bundle de prod (provado pelo gate).
 
 ### Fase 4 — PDF + hardening de bundle (PENDENTE — checklist exato por arquivo)
-- [ ] geração de PDF (jsPDF no navegador) a partir do `QuoteView` projetado por perfil (cliente sem custo/margem; interno só p/ `see_internal`).
+- [x] geração de PDF (jsPDF no navegador) a partir do `QuoteView` projetado por perfil (cliente sem custo/margem; interno só p/ `see_internal`) — **FEITO** (2026-11-05). `pdf.ts` reescrito para consumir `QuoteViewPayload` (client/commercial/internal), SEM importar o engine/`loadDevEngine`; a fronteira virou ESTRUTURAL (o payload externo não contém custo/margem). `pdf.confidentiality.test.ts` cobre os 3 perfis (texto + payload). Bundle gate segue 0 proibidos (jsPDF agora nem entra no dist de produção — todo o caminho é DEV-gated e DCE'd). **Autor; NÃO verificado pelo Guardian.**
 - [x] teste de bundle no CI: falha o build se o bundle comercial contiver identificadores sensíveis — **FEITO** (`scripts/check-bundle.mjs`, passo em `ci.yml`; Fase 3.3/A4).
-- [ ] teste E2E da jornada cotação→proposta→emissão contra o endpoint real.
+- [x] teste E2E da jornada cotação→proposta→emissão contra o endpoint real — **FEITO** (2026-11-05). `scripts/smoke-e2e-quote-proposal.mjs` (padrão smoke-quote/smoke-sla): cotação por perfil + reconciliação cotação=proposta + jornada submeter→análise→aprovar→consolidar→emitir + G-026. **27/27 PASS.** **Autor; NÃO verificado pelo Guardian.**
+  - **CORREÇÃO DE PREMISSA (CONFLICT informativo, não-bug):** a premissa "G-026 existe mas `emitir` ainda não o consulta" NÃO bate com o código atual — `api.ts` (~l.715) gated AMBAS `consolidar` (→`pronto_para_emissao`) E `emitir` (→`emitido`) via `emissionGate`, por defesa em profundidade (confirmado em `emissionGuard.test.ts`). O E2E ASSERTA o comportamento REAL; nada novo foi implementado.
 
 **ASSUMPTION (não transformada em requisito):** debounce ~250 ms, fim do cálculo offline/rascunho local, PDF permanece no navegador. Confirmar com o sponsor antes da Fase 3.

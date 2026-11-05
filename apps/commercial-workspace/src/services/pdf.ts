@@ -1,16 +1,20 @@
 import type { jsPDF } from 'jspdf';
-import type { ProposalSnapshot } from '@bondly/pricing-types';
 import { MODULE_CATALOG } from '@bondly/pricing-catalog';
-import { loadDevEngine } from './pricing/devEngine';
+import type { ClientQuote, CommercialQuote, InternalQuote, QuoteViewPayload } from './pricing/quoteTypes';
 import { brl, pct } from './defaults';
 
 /**
- * Gerador do PDF da proposta (§16). Consome EXCLUSIVAMENTE o snapshot do Pricing Engine
- * (paridade Engine = Dashboard = PDF, §20). Dois públicos:
- *   - audience='external' (padrão): PEÇA COMERCIAL para o CLIENTE — foca valor/investimento;
- *     NÃO expõe custos, margens, fees internos, ARKA nem o resultado Bondly do B2C (§12/§16).
- *   - audience='internal': PROPOSTA COMPLETA para uso interno — acrescenta composição da
- *     mensalidade, COGS, margens, alçada, ARKA e o resultado Bondly/Minu do B2C.
+ * Gerador do PDF da proposta (§16) — G-001-A Fase 4.
+ *
+ * FONTE DE VERDADE: o QuoteView PROJETADO PELO SERVIDOR (contrato `quote.v1`, apps/auth-proxy/src/quoteProjection.ts),
+ * a MESMA origem que as telas consomem via `useCentralPricing`. Este módulo NÃO importa o Pricing Engine nem as tabelas
+ * de custo/premissas: ele só FORMATA o que o servidor já decidiu enviar para o perfil. A fronteira de confidencialidade
+ * (§12/§16, CWE-200) é portanto ESTRUTURAL — não depende de o gerador "lembrar" de esconder nada:
+ *   - view 'client'/'commercial'  → PEÇA EXTERNA (cliente): o payload NÃO CONTÉM custo, COGS, margem, tributo nem fee
+ *     Minu (não há de onde vazar). Mostra preço/mensalidade/Setup/descontos/TCV/condições/cenários.
+ *   - view 'internal' (só perfil com proposal.see_internal)  → PEÇA COMPLETA: acrescenta composição da mensalidade,
+ *     COGS, margens, alçada e fees Minu, lidos de `view.result` (PricingResult completo do engine, projetado só aqui).
+ *
  * jsPDF e o logo (data URL ~22KB) carregam via import() dinâmico (code-splitting, §27.1).
  */
 
@@ -24,14 +28,30 @@ const SAND_LINE = '#e1ddd0';
 
 const moduleName = (id: string): string => MODULE_CATALOG.find((m) => m.id === id)?.name ?? id;
 
-export async function generateProposalPdf(
-  snap: ProposalSnapshot,
-  audience: 'internal' | 'external' = 'external',
-): Promise<jsPDF> {
-  const internal = audience === 'internal';
+/** Metadados fora do contrato de preço (identidade/emissão). Nome do cliente é dado comercial, não do engine. */
+export interface QuotePdfMeta {
+  readonly id: string;
+  readonly issuedAt: string;
+  readonly clientName?: string;
+  /** Módulos contratados (ids do catálogo público). Vêm da seleção da tela, não do preço. */
+  readonly selectedModules?: readonly string[];
+  /** Base de usuários elegíveis — número comercial exibido na peça (não é custo/margem). */
+  readonly users?: number;
+}
+
+/**
+ * Gera o PDF a partir do QuoteView projetado pelo servidor. A AUDIENCE é DERIVADA da `view`:
+ * 'internal' ⇒ peça completa; 'client'/'commercial' ⇒ peça externa (cliente). Não há parâmetro de audience que
+ * possa "forçar" interno sobre um payload externo: se o campo interno não veio no payload, ele não existe no PDF.
+ */
+export async function generateQuotePdf(quote: QuoteViewPayload, meta: QuotePdfMeta): Promise<jsPDF> {
+  const internal = quote.view === 'internal';
+  const result = internal ? (quote as InternalQuote).result : null;
+  const commercial = quote.view !== 'client' ? (quote as CommercialQuote) : null;
+  const client = quote as ClientQuote;
+
   const { jsPDF: JsPDF } = await import('jspdf');
   const { BONDLY_LOGO_PNG, BONDLY_LOGO_W, BONDLY_LOGO_H } = await import('../assets/logo');
-  const r = snap.result;
   const doc = new JsPDF({ unit: 'pt', format: 'a4' });
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
@@ -58,7 +78,7 @@ export async function generateProposalPdf(
     y += 24;
   };
   const kv = (k: string, v: string, strong = false) => {
-    // Layout em 2 colunas com QUEBRA no valor: chave à esquerda (até ~48% da largura),
+    // Layout em 2 colunas com QUEBRA no valor: chave à esquerda (até ~46% da largura),
     // valor à direita alinhado, podendo ocupar várias linhas — evita estouro/sobreposição.
     const keyW = cw * 0.46;
     const valW = cw * 0.5;
@@ -72,12 +92,10 @@ export async function generateProposalPdf(
     const rowH = 15;
     const blockH = rows * rowH + 10;
     ensure(blockH + 6);
-    // chave
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
     doc.setTextColor(INK_SOFT);
     doc.text(keyLines, M, y);
-    // valor (alinhado à direita)
     doc.setFont('helvetica', strong ? 'bold' : 'normal');
     doc.setFontSize(strong ? 12 : 11);
     doc.setTextColor(INK);
@@ -97,13 +115,11 @@ export async function generateProposalPdf(
   };
 
   // ---- CAPA ----------------------------------------------------------------
-  // Faixa navy no topo com o traço amber; o logo vai num cartão branco abaixo.
   doc.setFillColor(NAVY);
   doc.rect(0, 0, W, 210, 'F');
   doc.setFillColor(AMBER);
   doc.rect(0, 210, W, 6, 'F');
 
-  // Logo num cartão branco (o PNG tem fundo branco — some no cartão).
   const logoW = 150;
   const logoH = (logoW * BONDLY_LOGO_H) / BONDLY_LOGO_W;
   const cardPadX = 18;
@@ -112,7 +128,6 @@ export async function generateProposalPdf(
   doc.roundedRect(M, 40, logoW + cardPadX * 2, logoH + cardPadY * 2, 8, 8, 'F');
   doc.addImage(BONDLY_LOGO_PNG, 'PNG', M + cardPadX, 40 + cardPadY, logoW, logoH);
 
-  // Título e cliente na faixa navy
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
   doc.setTextColor(AMBER);
@@ -120,16 +135,19 @@ export async function generateProposalPdf(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(26);
   doc.setTextColor('#ffffff');
-  const clientName = snap.input.arka?.clientName?.trim() || 'Programa de Fidelidade';
+  const clientName = meta.clientName?.trim() || 'Programa de Fidelidade';
   doc.text(doc.splitTextToSize(clientName, cw), M, 180);
 
   y = 250;
 
   // ---- ABERTURA ------------------------------------------------------------
+  const usersLabel =
+    typeof meta.users === 'number' && meta.users > 0
+      ? `uma base de ${meta.users.toLocaleString('pt-BR')} usuários elegíveis em `
+      : '';
   paragraph(
     `Esta proposta apresenta o investimento e o alcance do programa de fidelidade Bondly para ` +
-      `${clientName}, dimensionado para uma base de ${snap.input.volume.users.toLocaleString('pt-BR')} ` +
-      `usuários elegíveis em um contrato de ${snap.input.negotiation.term} meses.`,
+      `${clientName}, dimensionado para ${usersLabel}um contrato de ${client.termMonths} meses.`,
     INK_SOFT,
     12,
   );
@@ -137,19 +155,17 @@ export async function generateProposalPdf(
 
   // ---- INVESTIMENTO (destaque) --------------------------------------------
   sectionTitle('Investimento');
-  // Cartão de destaque: valor mensal grande à esquerda; Setup e 1º ano empilhados à direita.
   const cardH = 100;
   ensure(cardH + 20);
   const cardTop = y - 4;
   doc.setFillColor(SAND);
   doc.roundedRect(M, cardTop, cw, cardH, 10, 10, 'F');
   const padX = 20;
-  // rótulo + valor mensal (fonte ajustada para caber na metade esquerda)
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(11);
   doc.setTextColor(MUTED);
   doc.text('Investimento mensal estimado', M + padX, cardTop + 26);
-  const monthly = `${brl(r.core + r.servicesMrr)}/mês`;
+  const monthly = `${brl(client.pricing.monthly)}/mês`;
   const leftW = cw * 0.56 - padX;
   let mSize = 28;
   doc.setFont('helvetica', 'bold');
@@ -160,7 +176,6 @@ export async function generateProposalPdf(
   }
   doc.setTextColor(NAVY);
   doc.text(monthly, M + padX, cardTop + 62);
-  // coluna direita: dois valores empilhados
   const rx = W - M - padX;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
@@ -169,7 +184,7 @@ export async function generateProposalPdf(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(INK);
-  doc.text(brl(r.setupClient), rx, cardTop + 42, { align: 'right' });
+  doc.text(brl(client.pricing.setupTotal), rx, cardTop + 42, { align: 'right' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
   doc.setTextColor(MUTED);
@@ -177,12 +192,12 @@ export async function generateProposalPdf(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(INK);
-  doc.text(brl(r.clientYear1), rx, cardTop + 86, { align: 'right' });
+  doc.text(brl(client.pricing.firstYearTotal), rx, cardTop + 86, { align: 'right' });
   y = cardTop + cardH + 18;
 
-  kv('Valor total do contrato (TCV)', brl(r.tcvClient), true);
-  if (snap.input.negotiation.term > 12) {
-    kv('Condição especial de prazo', `contrato de ${snap.input.negotiation.term} meses`);
+  kv('Valor total do contrato (TCV)', brl(client.pricing.tcv), true);
+  if (client.termMonths > 12) {
+    kv('Condição especial de prazo', `contrato de ${client.termMonths} meses`);
   }
 
   // ---- ESCOPO (benefícios) -------------------------------------------------
@@ -191,106 +206,87 @@ export async function generateProposalPdf(
     'A plataforma Bondly entrega o programa de ponta a ponta: motor de pontos e engajamento, ' +
       'régua de comunicação com o participante e operação gerenciada — pronta para escalar com a sua base.',
   );
-  kv('Plano', r.tierName);
-  kv('Base de usuários elegíveis', snap.input.volume.users.toLocaleString('pt-BR'));
-  if (snap.selectedModules && snap.selectedModules.length > 0) {
-    kv('Módulos contratados', snap.selectedModules.map(moduleName).join(', '));
-  } else {
-    kv('Módulos contratados', `${Math.max(1, snap.input.complexity.modules)} módulo(s)`);
+  kv('Plano', client.plan.name);
+  if (typeof meta.users === 'number' && meta.users > 0) {
+    kv('Base de usuários elegíveis', meta.users.toLocaleString('pt-BR'));
   }
-  kv('Prazo do contrato', `${snap.input.negotiation.term} meses`);
-  if (r.servicesMrr > 0) kv('Equipe dedicada (recorrente)', `${brl(r.servicesMrr)}/mês`);
+  if (meta.selectedModules && meta.selectedModules.length > 0) {
+    kv('Módulos contratados', meta.selectedModules.map(moduleName).join(', '));
+  }
+  kv('Prazo do contrato', `${client.termMonths} meses`);
+  if (client.pricing.servicesMonthly > 0) kv('Equipe dedicada (recorrente)', `${brl(client.pricing.servicesMonthly)}/mês`);
 
-  // ---- PROJEÇÃO DE ENGAJAMENTO (cenários §13, só receita) -----------------
+  // ---- PROJEÇÃO DE ENGAJAMENTO (cenários §13, só preço ao cliente) --------
   sectionTitle('Projeção por engajamento');
   paragraph(
     'Como o programa acompanha o uso real, projetamos três cenários variando o engajamento mensal ' +
       'da base em ±30%. Os valores abaixo são o que o programa representa em cada cenário.',
   );
-  ensure(30 + snap.scenarios.length * 20);
   const cLabels: Record<string, string> = {
     conservador: 'Conservador (−30%)',
     base: 'Base',
     otimista: 'Otimista (+30%)',
   };
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(INK_SOFT);
-  doc.text('Cenário', M, y);
-  doc.text('Mensal', W - M - 170, y, { align: 'right' });
-  doc.text('Total do contrato', W - M, y, { align: 'right' });
-  y += 8;
-  doc.setDrawColor(SAND_LINE);
-  doc.line(M, y, W - M, y);
-  y += 16;
-  for (const s of snap.scenarios) {
-    const isBase = s.name === 'base';
-    doc.setFont('helvetica', isBase ? 'bold' : 'normal');
+  if (client.scenarios.length > 0) {
+    ensure(30 + client.scenarios.length * 20);
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
-    doc.setTextColor(isBase ? NAVY : INK);
-    doc.text(cLabels[s.name] ?? s.name, M, y);
-    doc.text(`${brl(s.result.core)}/mês`, W - M - 170, y, { align: 'right' });
-    doc.text(brl(s.result.tcvClient), W - M, y, { align: 'right' });
-    y += 19;
-  }
-
-  // ---- B2C (quando incluído) ----------------------------------------------
-  if (snap.b2c) {
-    const b = snap.b2c.result.tot;
-    sectionTitle('Assinaturas B2C · 2º semestre de 2027');
-    if (internal) {
-      paragraph('Projeção do produto de assinaturas no 2º semestre de 2027, com o resultado Bondly e o split com a Minu.');
-      kv('Assinantes ativos em dezembro', b.end.toLocaleString('pt-BR', { maximumFractionDigits: 0 }));
-      kv('Valor transacionado no semestre (GMV)', brl(b.gmv));
-      kv('Receita de processamento', brl(b.rev));
-      kv('Resultado Bondly no semestre', brl(b.total), true);
-      kv('Parte da Minu', brl(b.minu));
-    } else {
-      paragraph(
-        'Projeção do produto de assinaturas para a base, no 2º semestre de 2027. ' +
-          'Valores de alcance ao cliente — sem dados internos.',
-      );
-      kv('Assinantes ativos em dezembro', b.end.toLocaleString('pt-BR', { maximumFractionDigits: 0 }));
-      kv('Valor transacionado no semestre (GMV)', brl(b.gmv));
-      kv('Receita de processamento', brl(b.rev));
+    doc.setTextColor(INK_SOFT);
+    doc.text('Cenário', M, y);
+    doc.text('Mensal', W - M - 170, y, { align: 'right' });
+    doc.text('Total do contrato', W - M, y, { align: 'right' });
+    y += 8;
+    doc.setDrawColor(SAND_LINE);
+    doc.line(M, y, W - M, y);
+    y += 16;
+    for (const s of client.scenarios) {
+      const isBase = s.name === 'base';
+      doc.setFont('helvetica', isBase ? 'bold' : 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(isBase ? NAVY : INK);
+      doc.text(cLabels[s.name] ?? s.name, M, y);
+      doc.text(`${brl(s.monthly)}/mês`, W - M - 170, y, { align: 'right' });
+      doc.text(brl(s.tcv), W - M, y, { align: 'right' });
+      y += 19;
     }
   }
 
-  // ---- SEÇÕES INTERNAS (uso interno apenas) -------------------------------
-  if (internal) {
+  // ---- SEÇÕES INTERNAS (uso interno apenas; lidas de quote.result) --------
+  // Estruturalmente inalcançáveis na peça externa: `result`/`composition`/`waterfall`/fees Minu só existem
+  // no payload quando view==='internal'. Para client/commercial, `result` é null e `commercial` pode ser null.
+  if (internal && result) {
     sectionTitle('Composição da mensalidade (interno)');
-    kv('Platform Fee', `${brl(r.platformFee)}/mês`);
-    kv('DAU Usage', `${brl(r.usage)}/mês`);
-    kv('Processing', `${brl(r.processing)}/mês`);
-    if (r.servicesMrr > 0) kv('Recursos dedicados', `${brl(r.servicesMrr)}/mês`);
-    kv('Receita recorrente Core', `${brl(r.core)}/mês`, true);
+    kv('Platform Fee', `${brl(result.platformFee)}/mês`);
+    kv('DAU Usage', `${brl(result.usage)}/mês`);
+    kv('Processing', `${brl(result.processing)}/mês`);
+    if (result.servicesMrr > 0) kv('Recursos dedicados', `${brl(result.servicesMrr)}/mês`);
+    kv('Receita recorrente Core', `${brl(result.core)}/mês`, true);
 
     sectionTitle('Custos e margens (interno)');
-    kv('Custo variável (COGS)', `${brl(r.costs.total)}/mês`);
+    kv('Custo variável (COGS)', `${brl(result.costs.total)}/mês`);
     paragraph(
-      `CleverTap ${brl(r.costs.cleverTap)} · infra ${brl(r.costs.infra)} · NF ${brl(r.costs.invoices)} · ` +
-        `comunicação ${brl(r.costs.communication)}`,
+      `CleverTap ${brl(result.costs.cleverTap)} · infra ${brl(result.costs.infra)} · NF ${brl(result.costs.invoices)} · ` +
+        `comunicação ${brl(result.costs.communication)}`,
       MUTED,
       10,
     );
-    kv('Margem técnica', pct(r.technicalMargin), true);
-    kv('Margem líquida (Y1 / regime)', `${pct(r.netMarginY1)} / ${pct(r.netMarginSteady)}`);
-    kv('Status de margem', r.marginStatus);
-    kv('Alçada de desconto', r.discountAuthority);
-    if (snap.input.negotiation.viaMinu) {
-      kv('Fee Minu — conversão (mês)', brl(r.minuConversionFee));
-      kv('Fee Minu — conta (mês)', brl(r.minuAccountFee));
-      kv('Minu ganha no 1º ano', brl(r.minuYear1));
+    kv('Margem técnica', pct(result.technicalMargin), true);
+    kv('Margem líquida (Y1 / regime)', `${pct(result.netMarginY1)} / ${pct(result.netMarginSteady)}`);
+    kv('Status de margem', result.marginStatus);
+    kv('Alçada de desconto', result.discountAuthority);
+    if (result.minuConversionFee > 0 || result.minuAccountFee > 0 || result.minuYear1 > 0) {
+      kv('Fee Minu — conversão (mês)', brl(result.minuConversionFee));
+      kv('Fee Minu — conta (mês)', brl(result.minuAccountFee));
+      kv('Minu ganha no 1º ano', brl(result.minuYear1));
     }
-
-    sectionTitle('Evidência comercial — ARKA (interno)');
-    const { arkaClassification } = await loadDevEngine();
-    const arka = arkaClassification(snap.input.arka);
-    kv('Classe ARKA', `${arka.arkaClass} · ${arka.stage.maturity} (estágio ${arka.stage.rank}/15)`);
-    kv('Elegível ao Orçamento Compromissado', arka.allOk ? 'Sim' : 'Não — completar evidência');
-    paragraph(arka.note, MUTED, 10);
-    if (r.warnings.length > 0) {
-      paragraph('Alertas: ' + r.warnings.map((w) => w.message).join(' '), MUTED, 10);
+    // Sinais de política que o servidor marcou (sem valores): alertas de margem/alçada do engine.
+    if (commercial) {
+      const { marginAlert, flags } = commercial.policy;
+      kv('Sinal de margem', `${marginAlert.level}${marginAlert.requiresApproval ? ' · requer aprovação' : ''}`);
+      if (flags.length > 0) paragraph('Flags de política: ' + flags.join(', '), MUTED, 10);
+    }
+    if (result.warnings.length > 0) {
+      paragraph('Alertas: ' + result.warnings.map((w) => w.message).join(' '), MUTED, 10);
     }
   }
 
@@ -300,7 +296,7 @@ export async function generateProposalPdf(
     '1. Validação desta proposta pelo time.  2. Alinhamento de escopo e cronograma de implantação.  ' +
       '3. Formalização do contrato e início do onboarding.',
   );
-  const valid = new Date(snap.issuedAt);
+  const valid = new Date(meta.issuedAt);
   valid.setDate(valid.getDate() + 30);
   paragraph(
     `Proposta válida até ${valid.toLocaleDateString('pt-BR')}. ` +
@@ -318,15 +314,12 @@ export async function generateProposalPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(MUTED);
-    doc.text(internal ? `Bondly · Proposta ${snap.id} · USO INTERNO` : `Bondly · Proposta ${snap.id}`, M, H - 30);
-    doc.text(
-      internal
-        ? `Motor ${r.engineVersion} · premissas ${r.premisesVersion} (${r.premisesHash}) · pág. ${p}/${pages}`
-        : `Emitida em ${new Date(snap.issuedAt).toLocaleDateString('pt-BR')} · pág. ${p}/${pages}`,
-      W - M,
-      H - 30,
-      { align: 'right' },
-    );
+    doc.text(internal ? `Bondly · Proposta ${meta.id} · USO INTERNO` : `Bondly · Proposta ${meta.id}`, M, H - 30);
+    // premisesHash só existe em `result` (interno). Na peça externa, a data de emissão é suficiente.
+    const right = internal && result
+      ? `Motor ${quote.engineVersion} · premissas ${quote.premisesVersion} (${result.premisesHash}) · pág. ${p}/${pages}`
+      : `Emitida em ${new Date(meta.issuedAt).toLocaleDateString('pt-BR')} · pág. ${p}/${pages}`;
+    doc.text(right, W - M, H - 30, { align: 'right' });
   }
 
   return doc;

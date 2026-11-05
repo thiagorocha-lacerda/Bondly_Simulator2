@@ -15,7 +15,8 @@
     "smoke:sla": "npm run build --workspace @bondly/pricing-engine && npm run build --workspace @bondly/auth-proxy && node scripts/smoke-sla.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
-    "smoke:quote": "npm run build --workspace @bondly/pricing-engine && npm run build --workspace @bondly/auth-proxy && node scripts/smoke-quote.mjs"
+    "smoke:quote": "npm run build --workspace @bondly/pricing-engine && npm run build --workspace @bondly/auth-proxy && node scripts/smoke-quote.mjs",
+    "smoke:e2e": "npm run build --workspace @bondly/pricing-engine && npm run build --workspace @bondly/auth-proxy && node scripts/smoke-e2e-quote-proposal.mjs"
   },
   "engines": {
     "node": ">=22"

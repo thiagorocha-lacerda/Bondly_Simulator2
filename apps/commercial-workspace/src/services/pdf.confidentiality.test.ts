@@ -1,11 +1,24 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createProposalSnapshot } from '@bondly/pricing-engine';
+// Projeção por perfil: em DEV usamos `projectQuotePreview`, o ESPELHO do servidor cujos campos são travados
+// contra apps/auth-proxy/src/quoteProjection.ts por quoteTypes.sync.test.ts. Assim o PDF é provado contra o
+// MESMO formato de QuoteView que o fio de produção entrega, sem importar o auth-proxy no grafo do workspace.
+import { projectQuotePreview } from './pricing/devEngine';
+import type { QuoteViewName } from './pricing/quoteTypes';
 import { DEFAULT_INPUT } from './defaults';
 
 /**
- * Prova de coerência de confidencialidade (§12/§16): captura TODO texto que o gerador escreve no
- * PDF (interceptando doc.text via mock do jsPDF) e verifica que a peça EXTERNA não contém termos
- * internos (COGS, margem, resultado Bondly, ARKA, hash) e que a INTERNA contém.
+ * Prova ESTRUTURAL de confidencialidade por PERFIL (§12/§16, G-001 Fase 4).
+ *
+ * O PDF é gerado a partir do QuoteView PROJETADO PELO SERVIDOR (client/commercial/internal). A fronteira é
+ * estrutural: a peça do cliente nasce de um payload que NÃO CONTÉM custo/COGS/margem/tributo/fee Minu — não há
+ * de onde vazar. Capturamos TODO texto que o gerador escreve (interceptando doc.text via mock do jsPDF) e, além
+ * disso, varremos o PRÓPRIO PAYLOAD (JSON) para provar que os campos internos sequer existem no dado de origem.
+ *
+ * Perfis cobertos (mapeamento RBAC → view, docs/03/quoteProjection):
+ *   business / approver  → view 'commercial'  → PEÇA EXTERNA (sem interno)
+ *   tech / admin         → view 'internal'    → PEÇA COMPLETA (com interno)
+ *   cliente final        → view 'client'      → PEÇA EXTERNA (sem interno)
  */
 const captured: string[] = [];
 vi.mock('jspdf', () => {
@@ -33,34 +46,67 @@ vi.mock('jspdf', () => {
 });
 vi.mock('../assets/logo', () => ({ BONDLY_LOGO_PNG: 'data:image/png;base64,AA==', BONDLY_LOGO_W: 875, BONDLY_LOGO_H: 240 }));
 
-async function textsFor(audience: 'internal' | 'external'): Promise<string> {
-  captured.length = 0;
-  const { generateProposalPdf } = await import('./pdf');
+/** Projeta um QuoteView real (via engine + projectQuote do servidor) para o perfil pedido. */
+function viewFor(view: QuoteViewName) {
   const snap = createProposalSnapshot({
     id: 'BONDLY-2027-000123',
     input: { ...DEFAULT_INPUT, arka: { clientName: 'ACME', goLiveDate: '2027-03-01', owner: 'Ana', evidenceStage: 8, probability: 60 } },
     selectedModules: ['points', 'engagement'],
-    b2cInput: { som: 1_000_000, conv: 0.01, ticket: 10, churn: 0.08, fee: 0.1, weights: [10, 14, 17, 19, 20, 20] } as never,
   });
-  await generateProposalPdf(snap, audience);
+  const scenarios = snap.scenarios.map((s) => ({ name: s.name, result: s.result }));
+  return projectQuotePreview(view, snap.result, snap.input.negotiation.term, scenarios);
+}
+
+async function textsFor(view: QuoteViewName): Promise<string> {
+  captured.length = 0;
+  const { generateQuotePdf } = await import('./pdf');
+  const quote = viewFor(view);
+  await generateQuotePdf(quote, {
+    id: 'BONDLY-2027-000123',
+    issuedAt: '2027-02-01T00:00:00.000Z',
+    clientName: 'ACME',
+    selectedModules: ['points', 'engagement'],
+    users: DEFAULT_INPUT.volume.users,
+  });
   return captured.join('\n');
 }
 
-describe('PDF — coerência de confidencialidade por audience', () => {
-  const INTERNAL_TERMS = [/COGS|Custo variável/i, /Margem técnica/i, /Resultado Bondly/i, /ARKA/i, /Alçada/i, /premissas v/i];
+// Termos internos que a peça externa NUNCA pode conter (texto renderizado).
+const INTERNAL_TERMS = [/COGS|Custo variável/i, /Margem técnica/i, /Platform Fee/i, /Fee Minu/i, /premissas v/i, /Composição da mensalidade/i];
+// Chaves internas que não podem sequer existir no PAYLOAD de origem das peças externas.
+const INTERNAL_PAYLOAD_KEYS = ['costs', 'taxes', 'technicalMargin', 'netMargin', 'tcvBondly', 'setupNet', 'premisesHash', 'minuConversionFee', '"result"'];
 
-  it('EXTERNA (cliente) NÃO expõe nenhum termo interno', async () => {
-    const t = await textsFor('external');
+describe('PDF por perfil — confidencialidade estrutural (QuoteView)', () => {
+  it("cliente (view 'client') NÃO expõe termo interno no texto nem campo interno no payload", async () => {
+    const quote = viewFor('client');
+    const payload = JSON.stringify(quote);
+    for (const k of INTERNAL_PAYLOAD_KEYS) expect(payload).not.toContain(k);
+
+    const t = await textsFor('client');
     for (const re of INTERNAL_TERMS) expect(t).not.toMatch(re);
-    // mas mantém o que é do cliente
     expect(t).toMatch(/Investimento mensal estimado/i);
     expect(t).toMatch(/Motor de Pontos/i);
     expect(t).toMatch(/PROPOSTA COMERCIAL/i);
   });
 
-  it('INTERNA contém os termos internos (completa)', async () => {
+  it("business/approver (view 'commercial') NÃO expõe custo/margem no texto nem no payload", async () => {
+    const quote = viewFor('commercial');
+    const payload = JSON.stringify(quote);
+    // commercial carrega composição/waterfall/alçada, mas NUNCA custo/margem/tributo/fee Minu nem o PricingResult.
+    for (const k of ['costs', 'taxes', 'technicalMargin', 'netMargin', 'tcvBondly', 'setupNet', 'premisesHash', 'minuConversionFee', '"result"']) {
+      expect(payload).not.toContain(k);
+    }
+    const t = await textsFor('commercial');
+    for (const re of INTERNAL_TERMS) expect(t).not.toMatch(re);
+    expect(t).toMatch(/Investimento mensal estimado/i);
+    expect(t).toMatch(/PROPOSTA COMERCIAL/i);
+  });
+
+  it("tech/admin (view 'internal') CONTÉM os termos internos (peça completa)", async () => {
     const t = await textsFor('internal');
     for (const re of INTERNAL_TERMS) expect(t).toMatch(re);
     expect(t).toMatch(/USO INTERNO/i);
+    expect(t).toMatch(/Custo variável/i);
+    expect(t).toMatch(/Margem técnica/i);
   });
 });

@@ -7,7 +7,7 @@ import { DEFAULT_INPUT } from '../services/defaults';
 
 // Mocka o gerador de PDF para simular falha sem invocar jsPDF real.
 vi.mock('../services/pdf', () => ({
-  generateProposalPdf: vi.fn().mockRejectedValue(new Error('jspdf indisponível')),
+  generateQuotePdf: vi.fn().mockRejectedValue(new Error('jspdf indisponível')),
 }));
 
 const SEQ_KEY = 'bondly-proposal-seq';
