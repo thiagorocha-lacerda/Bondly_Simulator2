@@ -1,4 +1,4 @@
-import type { PricingResult } from '@bondly/pricing-engine';
+import type { PricingResult } from '@bondly/pricing-types';
 import { brl, pct } from '../services/defaults';
 import { useAudience } from '../app/audience';
 

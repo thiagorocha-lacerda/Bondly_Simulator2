@@ -1,8 +1,14 @@
-import type { PricingInput, DedicatedProfile } from '@bondly/pricing-engine';
-import { services as computeServices, CURRENT_PREMISES } from '@bondly/pricing-engine';
+import { useEffect, useState } from 'react';
+import type { PricingInput, DedicatedProfile } from '@bondly/pricing-types';
 import { Panel, NumberField, PercentField } from './Fields';
 import type { InputPatch } from '../services/patch';
 import { brl, pct } from '../services/defaults';
+import { loadDevEngine } from '../services/pricing/devEngine';
+
+type ServicesView = {
+  profiles: readonly { index: number; name: string; quantity: number; pms: number; pcs: number; marginPct: number; price: number; status: 'g' | 'y' | 'r' }[];
+  team: number; margin: number; mrr: number; implementationHours: number; hourPrice: number; hourPms: number; implementationCost: number; belowMin: number;
+};
 
 const chipClass = (s: 'g' | 'y' | 'r'): string => (s === 'g' ? 'ok' : s === 'y' ? 'warn' : 'bad');
 const chipLabel = (s: 'g' | 'y' | 'r'): string =>
@@ -27,17 +33,30 @@ export function ServicesPanel(props: { input: PricingInput; update: (patch: Inpu
     update({ services: { profiles: profiles.filter((_, idx) => idx !== i) } });
   };
 
-  const sv = computeServices({
-    params: input.services,
-    taxRate: CURRENT_PREMISES.taxRate.value,
-    tablePriceDefault: CURRENT_PREMISES.dedicatedTablePrice.value,
-    hourlyRate: CURRENT_PREMISES.hourlyRate.value,
-    implementationHours: input.complexity.implementationHours,
-    compCapDefault: CURRENT_PREMISES.serviceCompCap.value,
-    productiveHoursDefault: CURRENT_PREMISES.serviceProductiveHours.value,
-    minMarginDefault: CURRENT_PREMISES.serviceMinMargin.value,
-    hourMinMarginDefault: CURRENT_PREMISES.serviceHourMinMargin.value,
-  });
+  // G-001: cálculo de serviços (contém marginPct) via engine SOMENTE em DEV, fora do bundle de produção.
+  const [sv, setSv] = useState<ServicesView | null>(null);
+  useEffect(() => {
+    // G-001: guard LITERAL para DCE no build de produção (remove o acesso a `eng.services`/`eng.CURRENT_PREMISES`).
+    if (!import.meta.env.DEV) return undefined;
+    let alive = true;
+    void loadDevEngine().then((eng) => {
+      if (!alive) return;
+      setSv(eng.services({
+        params: input.services,
+        taxRate: eng.CURRENT_PREMISES.taxRate.value,
+        tablePriceDefault: eng.CURRENT_PREMISES.dedicatedTablePrice.value,
+        hourlyRate: eng.CURRENT_PREMISES.hourlyRate.value,
+        implementationHours: input.complexity.implementationHours,
+        compCapDefault: eng.CURRENT_PREMISES.serviceCompCap.value,
+        productiveHoursDefault: eng.CURRENT_PREMISES.serviceProductiveHours.value,
+        minMarginDefault: eng.CURRENT_PREMISES.serviceMinMargin.value,
+        hourMinMarginDefault: eng.CURRENT_PREMISES.serviceHourMinMargin.value,
+      }) as unknown as ServicesView);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [input.services, input.complexity.implementationHours]);
 
   return (
     <Panel
@@ -84,6 +103,10 @@ export function ServicesPanel(props: { input: PricingInput; update: (patch: Inpu
       </div>
 
       <h3 style={{ marginTop: 16 }}>Resultado dos serviços</h3>
+      {!sv ? (
+        <p className="sub" role="status">O cálculo de serviços é consolidado no servidor (Fase 4 — pendente). Indisponível neste ambiente.</p>
+      ) : (
+      <>
       <table className="bd">
         <tbody>
           {sv.profiles.filter((p) => p.quantity > 0).map((p) => (
@@ -109,6 +132,8 @@ export function ServicesPanel(props: { input: PricingInput; update: (patch: Inpu
       </table>
       {sv.belowMin > 0 && (
         <div className="note bad">{sv.belowMin} perfil(is) abaixo da margem mínima: proposta economicamente inadequada.</div>
+      )}
+      </>
       )}
     </Panel>
   );

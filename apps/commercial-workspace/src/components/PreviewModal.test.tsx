@@ -22,16 +22,17 @@ describe('PreviewModal — confidencialidade por audience (§12/§16)', () => {
       </AudienceProvider>,
     );
 
-  it('visão interna: expõe o resultado Bondly H2 do B2C', () => {
+  it('visão interna: expõe o resultado Bondly H2 do B2C', async () => {
     renderWith('internal');
-    expect(screen.getByText(/resultado Bondly H2/i)).toBeInTheDocument();
+    // G-001: o snapshot da pré-visualização vem do engine (DEV, import dinâmico) — espera o render assíncrono.
+    expect(await screen.findByText(/resultado Bondly H2/i)).toBeInTheDocument();
     expect(screen.queryByText(/ativos em dez/i)).not.toBeInTheDocument();
   });
 
-  it('visão comercial: NÃO expõe o resultado Bondly; mostra só assinantes ativos', () => {
+  it('visão comercial: NÃO expõe o resultado Bondly; mostra só assinantes ativos', async () => {
     renderWith('external');
+    expect(await screen.findByText(/ativos em dez/i)).toBeInTheDocument();
     expect(screen.queryByText(/resultado Bondly H2/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/ativos em dez/i)).toBeInTheDocument();
   });
 
   it('sem B2C incluído: nenhuma linha B2C em qualquer visão', () => {
@@ -60,13 +61,14 @@ describe('PreviewModal — confidencialidade por audience (§12/§16)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('avisa quando não há cliente nomeado; sem aviso quando preenchido', () => {
+  it('avisa quando não há cliente nomeado; sem aviso quando preenchido', async () => {
     const { unmount } = render(
       <AudienceProvider initial="internal">
         <PreviewModal input={DEFAULT_INPUT} onClose={() => {}} />
       </AudienceProvider>,
     );
-    expect(screen.getByText(/Sem cliente nomeado/i)).toBeInTheDocument();
+    // G-001: o aviso só renderiza após o snapshot (engine, DEV) — espera o render assíncrono.
+    expect(await screen.findByText(/Sem cliente nomeado/i)).toBeInTheDocument();
     unmount();
 
     const withClient = { ...DEFAULT_INPUT, arka: { ...(DEFAULT_INPUT.arka ?? { goLiveDate: '', owner: '', evidenceStage: 1, probability: 0 }), clientName: 'ACME' } };
@@ -75,6 +77,8 @@ describe('PreviewModal — confidencialidade por audience (§12/§16)', () => {
         <PreviewModal input={withClient} onClose={() => {}} />
       </AudienceProvider>,
     );
+    // espera o snapshot carregar (tabela do cliente) e confirma que o aviso NÃO aparece
+    expect(await screen.findByText(/Tier · usuários/i)).toBeInTheDocument();
     expect(screen.queryByText(/Sem cliente nomeado/i)).not.toBeInTheDocument();
   });
 });

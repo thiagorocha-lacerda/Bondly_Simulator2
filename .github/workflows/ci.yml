@@ -48,6 +48,11 @@ jobs:
       - name: Build do Commercial Workspace
         run: npm run build --workspace @bondly/commercial-workspace
 
+      - name: Gate de bundle (G-001 — cálculo/tabelas de custo não vazam ao cliente)
+        # Prova que o bundle de produção não contém o motor de cálculo nem tabelas de custo/premissas
+        # (ADR docs/15). Falha a CI se qualquer identificador proibido aparecer no dist.
+        run: node scripts/check-bundle.mjs
+
       - name: Build do Auth Proxy (Web Service)
         run: npm run build --workspace @bondly/auth-proxy
 

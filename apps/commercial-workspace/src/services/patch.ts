@@ -1,4 +1,4 @@
-import type { PricingInput } from '@bondly/pricing-engine';
+import type { PricingInput } from '@bondly/pricing-types';
 
 type DeepPartialValue<V> = V extends readonly unknown[]
   ? V

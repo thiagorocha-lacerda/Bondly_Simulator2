@@ -257,6 +257,76 @@ describe('G-007 — auditoria append-only (triggers) e logs sem e-mail em claro'
   });
 });
 
+describe('G-031 — imutabilidade de approval_decisions e sla_events por trigger', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'bondly-g31-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  function rawDb(d: string) {
+    const require = createRequire(import.meta.url) as (id: string) => unknown;
+    const { DatabaseSync } = require('node:sqlite') as {
+      DatabaseSync: new (p: string) => { exec(s: string): void; prepare(s: string): { run(...a: unknown[]): unknown; get(...a: unknown[]): unknown } };
+    };
+    const db = new DatabaseSync(join(d, 'bondly.db'));
+    db.exec('PRAGMA recursive_triggers = ON;'); // mesmo pragma do runtime (G-028/G-031)
+    return db;
+  }
+
+  it('approval_decisions: DO NOTHING idempotente passa; 2º DO NOTHING não altera; UPDATE/DELETE/REPLACE abortam', async () => {
+    await createSqliteRepository(dir);
+    const db = rawDb(dir);
+    const ins = (d: string) =>
+      db.prepare(`INSERT INTO approval_decisions (proposal_id, kind, decision) VALUES ('P1','excecao_comercial',?) ON CONFLICT(proposal_id, kind) DO NOTHING`).run(d);
+    // 1º INSERT grava; 2º com decisão diferente via DO NOTHING NÃO altera (idempotência legítima preservada).
+    expect(() => ins('approved')).not.toThrow();
+    expect(() => ins('rejected')).not.toThrow();
+    const row = db.prepare(`SELECT decision FROM approval_decisions WHERE proposal_id='P1' AND kind='excecao_comercial'`).get() as { decision: string };
+    expect(row.decision).toBe('approved');
+    // Mutações proibidas abortam.
+    expect(() => db.exec(`UPDATE approval_decisions SET decision='rejected'`)).toThrow(/imutável/);
+    expect(() => db.exec(`DELETE FROM approval_decisions`)).toThrow(/imutável/);
+    // INSERT OR REPLACE dispara o BEFORE DELETE implícito (recursive_triggers=ON) e aborta.
+    expect(() =>
+      db.exec(`INSERT OR REPLACE INTO approval_decisions (proposal_id, kind, decision) VALUES ('P1','excecao_comercial','rejected')`),
+    ).toThrow(/imutável/);
+    // valor permanece o original
+    const after = db.prepare(`SELECT decision FROM approval_decisions WHERE proposal_id='P1' AND kind='excecao_comercial'`).get() as { decision: string };
+    expect(after.decision).toBe('approved');
+  });
+
+  it('sla_events: INSERT puro passa; UPDATE/DELETE/REPLACE(id) abortam', async () => {
+    await createSqliteRepository(dir);
+    const db = rawDb(dir);
+    const ins = (id: string) =>
+      db.prepare(`INSERT INTO sla_events (id, proposal_id, kind, at, by_email, payload) VALUES (?, 'P1','started',1,'a@minu.co','{}')`).run(id);
+    expect(() => ins('E1')).not.toThrow();
+    expect(() => ins('E2')).not.toThrow();
+    expect(() => db.exec(`UPDATE sla_events SET kind='completed'`)).toThrow(/append-only/);
+    expect(() => db.exec(`DELETE FROM sla_events`)).toThrow(/append-only/);
+    expect(() => ins('E1')).toThrow(/append-only|replace/i); // mesmo id ⇒ no_replace (ou UNIQUE PK)
+    expect(() =>
+      db.exec(`INSERT OR REPLACE INTO sla_events (id, proposal_id, kind, at, by_email, payload) VALUES ('E2','P1','paused',2,'a@minu.co','{}')`),
+    ).toThrow(/append-only/);
+  });
+
+  it('migração aditiva idempotente: reabrir o banco de schema anterior não falha e os triggers passam a valer', async () => {
+    // Simula banco de schema ANTERIOR (sem os triggers G-031): cria as tabelas na mão, depois deixa a migração rodar.
+    const pre = rawDb(dir);
+    pre.exec(`CREATE TABLE approval_decisions (proposal_id TEXT NOT NULL, kind TEXT NOT NULL, decision TEXT NOT NULL, PRIMARY KEY (proposal_id, kind));
+              CREATE TABLE sla_events (id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL, kind TEXT NOT NULL, at INTEGER NOT NULL, by_email TEXT NOT NULL, payload TEXT NOT NULL);`);
+    pre.prepare(`INSERT INTO approval_decisions VALUES ('P0','alteracao_escopo','approved')`).run();
+    // A migração (createSqliteRepository) é aditiva/IF NOT EXISTS: não falha com dados/tabelas pré-existentes.
+    await expect(createSqliteRepository(dir)).resolves.toBeTruthy();
+    const db = rawDb(dir);
+    // dado pré-existente intacto e agora imutável
+    const row = db.prepare(`SELECT decision FROM approval_decisions WHERE proposal_id='P0'`).get() as { decision: string };
+    expect(row.decision).toBe('approved');
+    expect(() => db.exec(`DELETE FROM approval_decisions WHERE proposal_id='P0'`)).toThrow(/imutável/);
+  });
+});
+
 describe('G-001 (parcial) — bundle só com perfil; sem sourcemaps', () => {
   it('mayServeSpaBundle: sem perfil ⇒ não (exceto fluxo legado ligado)', () => {
     expect(mayServeSpaBundle(true, false)).toBe(true);

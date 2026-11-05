@@ -1,4 +1,4 @@
-import type { PricingInput, PricingResult } from '@bondly/pricing-engine';
+import type { PricingInput, PricingResult } from '@bondly/pricing-types';
 import { NumberField, PercentField, Panel } from './Fields';
 import { brl } from '../services/defaults';
 import type { InputPatch } from '../services/patch';

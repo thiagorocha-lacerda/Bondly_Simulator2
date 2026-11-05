@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import type { PricingInput, B2cInput, ModuleId } from '@bondly/pricing-engine';
-import { createProposalSnapshot, formatProposalId } from '@bondly/pricing-engine';
-import { generateProposalPdf } from '../services/pdf';
+import type { PricingInput, B2cInput, ModuleId, ProposalSnapshot } from '@bondly/pricing-types';
 import { brl } from '../services/defaults';
 import { useAudience } from '../app/audience';
+import { loadDevEngine } from '../services/pricing/devEngine';
+
+/** Formata o identificador BONDLY-2027-NNNNNN sem depender do engine (função trivial pura). */
+function formatProposalId(sequence: number, year = 2027): string {
+  return `BONDLY-${year}-${String(sequence).padStart(6, '0')}`;
+}
 
 const SEQ_KEY = 'bondly-proposal-seq';
 
@@ -37,21 +41,36 @@ export function PreviewModal(props: {
   onClose: () => void;
 }) {
   const { internal } = useAudience();
-  // Snapshot provisório só para exibir os números na conferência. ID real é atribuído ao gerar.
-  const [preview] = useState(() =>
-    createProposalSnapshot({
-      id: formatProposalId(0),
-      input: props.input,
-      ...(props.b2cInput ? { b2cInput: props.b2cInput } : {}),
-      ...(props.selectedModules ? { selectedModules: props.selectedModules } : {}),
-    }),
-  );
+  // G-001 (ADR docs/15): snapshot/PDF dependem do engine (premissas de custo + margem). Em PRODUÇÃO o engine
+  // não está no bundle — a pré-visualização e o PDF por `QuoteView` projetado são Fase 4 (PENDENTE). DEV gera o
+  // snapshot localmente via engine sob demanda; PROD mostra aviso claro e desabilita a geração.
+  const [preview, setPreview] = useState<ProposalSnapshot | null>(null);
+  useEffect(() => {
+    // G-001: guard LITERAL para DCE no build de produção (remove o acesso a `eng.createProposalSnapshot`).
+    if (!import.meta.env.DEV) return undefined;
+    let alive = true;
+    void loadDevEngine().then((eng) => {
+      if (!alive) return;
+      setPreview(
+        eng.createProposalSnapshot({
+          id: formatProposalId(0),
+          input: props.input,
+          ...(props.b2cInput ? { b2cInput: props.b2cInput } : {}),
+          ...(props.selectedModules ? { selectedModules: props.selectedModules } : {}),
+        }) as unknown as ProposalSnapshot,
+      );
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [issuedId, setIssuedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const r = preview.result;
-  const hasClient = !!preview.input.arka?.clientName?.trim();
+  const r = preview?.result ?? null;
+  const hasClient = !!preview?.input.arka?.clientName?.trim();
 
   // Acessibilidade: ao fechar o modal, devolve o foco ao elemento que o abriu (evita armadilha
   // de teclado) e permite fechar com Esc. O foco inicial vai ao diálogo.
@@ -74,17 +93,23 @@ export function PreviewModal(props: {
   // queimado (o próximo clique reusa o mesmo número). Só persiste o contador no sucesso.
   // `kind` escolhe a peça: 'external' (cliente) ou 'internal' (completa).
   const download = async (kind: 'internal' | 'external') => {
+    // G-001: geração de PDF depende do engine (DEV). Guard LITERAL para o Rollup remover TODO o corpo —
+    // incluindo `eng.createProposalSnapshot` e o import de `../services/pdf` — no build de produção.
+    if (!import.meta.env.DEV) return;
     setBusy(true);
     setError(null);
     try {
       const n = peekNextSequence();
       const id = formatProposalId(n);
-      const snap = createProposalSnapshot({
+      // G-001: engine + gerador de PDF carregados por import dinâmico SOMENTE em DEV (fora do bundle de produção).
+      const eng = await loadDevEngine();
+      const { generateProposalPdf } = await import('../services/pdf');
+      const snap = eng.createProposalSnapshot({
         id,
         input: props.input,
         ...(props.b2cInput ? { b2cInput: props.b2cInput } : {}),
         ...(props.selectedModules ? { selectedModules: props.selectedModules } : {}),
-      });
+      }) as unknown as ProposalSnapshot;
       const doc = await generateProposalPdf(snap, kind);
       const suffix = kind === 'internal' ? '-INTERNO' : '';
       doc.save(`${snap.id}${suffix}.pdf`);
@@ -105,6 +130,18 @@ export function PreviewModal(props: {
     <div className="pdfmodal-backdrop" role="dialog" aria-modal="true" aria-label="Pré-visualização da proposta" onClick={props.onClose}>
       <div className="pdfmodal" ref={dialogRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <h2>Pré-visualizar proposta</h2>
+        {!preview || !r ? (
+          <>
+            <p className="sub" role="status">
+              A pré-visualização e a geração de PDF são consolidadas no servidor a partir do QuoteView projetado
+              por perfil (Fase 4 — pendente). Indisponível neste ambiente.
+            </p>
+            <div className="actions">
+              <button className="ghostbtn" type="button" onClick={props.onClose}>Fechar</button>
+            </div>
+          </>
+        ) : (
+          <>
         <p className="sub">
           Identificador <b>{issuedId ?? 'definido ao gerar o PDF'}</b> · motor {r.engineVersion} · premissas {r.premisesVersion} ({r.premisesHash})
         </p>
@@ -167,6 +204,8 @@ export function PreviewModal(props: {
             ? 'O PDF do cliente omite custos, margens e dados internos. O PDF interno traz a composição completa, margens e ARKA.'
             : 'Este snapshot é imutável: alterar a proposta depois de confirmar gera uma nova revisão.'}
         </p>
+          </>
+        )}
       </div>
     </div>
   );

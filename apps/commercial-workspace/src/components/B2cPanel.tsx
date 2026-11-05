@@ -1,8 +1,14 @@
-import { useMemo } from 'react';
-import { runB2c, CURRENT_PREMISES, type B2cInput, type AntifraudMethod, type B2cScope } from '@bondly/pricing-engine';
+import { useEffect, useState } from 'react';
+import type { B2cInput, AntifraudMethod, B2cScope } from '@bondly/pricing-types';
 import { Panel, NumberField, PercentField, Toggle } from './Fields';
 import { brl, pct, n0 } from '../services/defaults';
 import { useAudience } from '../app/audience';
+import { IS_DEV, loadDevEngine } from '../services/pricing/devEngine';
+
+type B2cResultView = {
+  readonly tot: { readonly end: number; readonly gmv: number; readonly rev: number; readonly total: number; readonly minu: number };
+  readonly rows: readonly { readonly end: number; readonly rev: number; readonly total: number }[];
+};
 
 const B2C_MONTHS = ['jul/27', 'ago/27', 'set/27', 'out/27', 'nov/27', 'dez/27'];
 
@@ -21,8 +27,21 @@ export function B2cPanel(props: {
 }) {
   const { input, set } = props;
   const { internal } = useAudience();
-  const result = useMemo(() => runB2c(input, CURRENT_PREMISES), [input]);
-  const t = result.tot;
+  // G-001: projeção B2C via engine SOMENTE em DEV (import dinâmico atrás de import.meta.env.DEV; fora do bundle
+  // de produção). Server-side do B2C é Fase 4. Em PROD o resultado fica nulo e a tabela mostra aviso.
+  const [result, setResult] = useState<B2cResultView | null>(null);
+  useEffect(() => {
+    if (!IS_DEV) return;
+    let alive = true;
+    void loadDevEngine().then((eng) => {
+      if (alive) setResult(eng.runB2c(input, eng.CURRENT_PREMISES) as unknown as B2cResultView);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [input]);
+  const t = result?.tot ?? { end: 0, gmv: 0, rev: 0, total: 0, minu: 0 };
+  const rows = result?.rows ?? [];
   const cls = (v: number): string => (v < -0.005 ? 'bad' : v > 0.005 ? 'ok' : 'info');
 
   return (
@@ -80,23 +99,29 @@ export function B2cPanel(props: {
           )}
 
           <h3 style={{ marginTop: 16 }}>Projeção mensal</h3>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="bd" style={{ fontSize: 13 }}>
-              <thead>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>Mês</td>
-                  {B2C_MONTHS.map((m) => (<td key={m} style={{ textAlign: 'right', fontWeight: 700 }}>{m}</td>))}
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td>Ativos no fim</td>{result.rows.map((row, i) => (<td key={i} className="num">{n0(row.end)}</td>))}</tr>
-                <tr><td>Receita</td>{result.rows.map((row, i) => (<td key={i} className="num">{brl(row.rev)}</td>))}</tr>
-                {internal && (
-                  <tr><td>Resultado Bondly</td>{result.rows.map((row, i) => (<td key={i} className="num">{brl(row.total)}</td>))}</tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          {rows.length === 0 ? (
+            <p className="sub" role="status">
+              A projeção B2C é consolidada no servidor (Fase 4 — pendente). Indisponível neste ambiente.
+            </p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="bd" style={{ fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <td style={{ fontWeight: 700 }}>Mês</td>
+                    {B2C_MONTHS.map((m) => (<td key={m} style={{ textAlign: 'right', fontWeight: 700 }}>{m}</td>))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td>Ativos no fim</td>{rows.map((row, i) => (<td key={i} className="num">{n0(row.end)}</td>))}</tr>
+                  <tr><td>Receita</td>{rows.map((row, i) => (<td key={i} className="num">{brl(row.rev)}</td>))}</tr>
+                  {internal && (
+                    <tr><td>Resultado Bondly</td>{rows.map((row, i) => (<td key={i} className="num">{brl(row.total)}</td>))}</tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
     </Panel>

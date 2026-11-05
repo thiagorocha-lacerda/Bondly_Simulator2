@@ -18,7 +18,9 @@
     "allowImportingTsExtensions": true,
     "forceConsistentCasingInFileNames": true,
     "paths": {
-      "@bondly/pricing-engine": ["../../packages/pricing-engine/src/index.ts"]
+      "@bondly/pricing-engine": ["../../packages/pricing-engine/src/index.ts"],
+      "@bondly/pricing-types": ["../../packages/pricing-types/src/index.ts"],
+      "@bondly/pricing-catalog": ["../../packages/pricing-catalog/src/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]

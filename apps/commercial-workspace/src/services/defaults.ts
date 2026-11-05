@@ -1,4 +1,4 @@
-import type { PricingInput } from '@bondly/pricing-engine';
+import type { PricingInput } from '@bondly/pricing-types';
 
 /** Entrada padrão — reproduz os defaults do simulador HTML (§10.1 premissas padrão). */
 export const DEFAULT_INPUT: PricingInput = {

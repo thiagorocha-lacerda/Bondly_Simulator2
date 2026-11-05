@@ -1,6 +1,7 @@
 import type { jsPDF } from 'jspdf';
-import type { ProposalSnapshot } from '@bondly/pricing-engine';
-import { MODULE_CATALOG, arkaClassification } from '@bondly/pricing-engine';
+import type { ProposalSnapshot } from '@bondly/pricing-types';
+import { MODULE_CATALOG } from '@bondly/pricing-catalog';
+import { loadDevEngine } from './pricing/devEngine';
 import { brl, pct } from './defaults';
 
 /**
@@ -283,6 +284,7 @@ export async function generateProposalPdf(
     }
 
     sectionTitle('Evidência comercial — ARKA (interno)');
+    const { arkaClassification } = await loadDevEngine();
     const arka = arkaClassification(snap.input.arka);
     kv('Classe ARKA', `${arka.arkaClass} · ${arka.stage.maturity} (estágio ${arka.stage.rank}/15)`);
     kv('Elegível ao Orçamento Compromissado', arka.allOk ? 'Sim' : 'Não — completar evidência');

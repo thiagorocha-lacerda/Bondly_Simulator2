@@ -1,6 +1,6 @@
-import type { PricingInput } from '@bondly/pricing-engine';
+import type { PricingInput } from '@bondly/pricing-types';
 import { NumberField, PercentField, Panel, Toggle } from './Fields';
-import { MODULE_CATALOG, type ModuleId } from '@bondly/pricing-engine';
+import { MODULE_CATALOG, type ModuleId } from '@bondly/pricing-catalog';
 import type { InputPatch } from '../services/patch';
 
 /** Quick Proposal (§10.1): cliente, oportunidade, módulos, volumes, prazo → cálculo automático. */

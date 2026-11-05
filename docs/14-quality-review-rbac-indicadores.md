@@ -490,3 +490,337 @@ Implementada a **Alternativa A** do [ADR doc 15](./15-adr-g001-calculo-no-servid
 **PENDENTE (fases 3-4, NÃO verificável nesta entrega):** frontend ainda importa o engine local (motor/tabelas de custo/margem continuam no bundle comercial — o risco G-001 original **só é eliminado após a Fase 3**); geração de PDF por `QuoteView` projetado; teste de bundle no CI; E2E da jornada. G-002/G-006/G-013 não tocados por esta entrega.
 
 **NÃO VERIFICADO (honesto):** esta entrega NÃO marca VERIFIED — a migração do frontend está pendente, então a exposição de custo/margem no bundle comercial permanece até a Fase 3. Re-revisão pelo Guardian necessária.
+
+---
+
+## Resposta do autor (G-001 fase 3.1)
+
+**Escopo desta run (só isto):** criada a **camada de integração HTTP** da Fase 3, SEM migrar telas, SEM remover o engine do bundle e SEM tocar no PDF. O app continua 100% funcional sobre o engine local (`usePricing`/`calculate(input)` intactos).
+
+**Entregue** em `apps/commercial-workspace/src/services/pricing/`:
+- `quoteTypes.ts` — espelho do contrato `quote.v1` (ClientQuote/CommercialQuote/InternalQuote/QuoteViewPayload + PublicCatalog). Fonte de verdade = `auth-proxy/src/quoteProjection.ts` + `pricingQuote.ts`; **não importa auth-proxy no bundle**. `quoteTypes.sync.test.ts` lê o SOURCE do servidor e **quebra se os campos divergirem** (padrão pauseReasons). `PricingResult` (só visão `internal`) segue vindo do engine — sua remoção é pedaço posterior.
+- `quoteClient.ts` — `fetchCatalog()` / `postQuote({input?,proposalId?,view?})`, `credentials:'include'`, `contractVersion:'quote.v1'`, erros tipados (400 invalid_body/invalid_view/input_required/unsupported_contract_version/invalid_proposal_id · 403 forbidden/view_forbidden · 404 · 413 · 422 · 429) com mensagens pt-BR. **Nunca envia `view:'internal'`** (o servidor decide pela sessão).
+- `useQuote.ts` — debounce **~250 ms** (ASSUNÇÃO aprovada), `AbortController`, guarda de corrida (respostas fora de ordem ignoradas por nº de sequência), **backoff 429** (Retry-After com teto) e re-tentativa única; estados `idle|calculating|ok|error` + `lastUpdatedAt`. **Sem offline:** sem rede ⇒ `error` com mensagem clara.
+
+**Verificação (execução real):** typecheck CW **PASS** · 3 builds (engine→auth-proxy→commercial-workspace) **PASS** · testes CW **20 arquivos / 83 testes PASS** (dos quais **23 novos**: 9 client, 7 hook, 7 sincronia). Grep no `dist` comercial por `quoteProjection|auth-proxy|pricingQuote|projectQuote|publicCatalog|emissionGate` = **0**. A nova infra é tree-shaken do bundle porque **nenhuma tela a referencia ainda** (por desenho desta run) — por isso `/api/pricing/quote` também não aparece no `dist`; ela entrará no bundle no pedaço que liga o hook às telas.
+
+**ASSUMPTION:** debounce 250 ms / fim do offline / PDF no navegador — fixadas pelo sponsor; mantidas.
+**DECISION (técnica, registrada):** envelope de erro do servidor é **flat `{ error: code }`** (não `{ error:{code,message,correlationId} }`) — o client mapeia `code`→mensagem pt-BR no frontend em vez de inventar um envelope que o auth-proxy não emite; não alterei o contrato do servidor unilateralmente.
+**NÃO VERIFICADO (honesto):** esta run **NÃO marca VERIFIED**. Falta E2E contra o endpoint real, a migração das telas, a remoção do engine do bundle e o PDF por `QuoteView` — o risco G-001 original **só é eliminado quando a Fase 3 completa**. SEM commit/push/AWS nesta run. Re-revisão do Guardian pertence aos próximos pedaços.
+
+---
+
+## Resposta do autor (G-001 fase 3.2) — product-fullstack, 2026-11-04 — **IMPLEMENTADO-PENDENTE-REVISÃO**
+
+**O que mudou (2º pedaço da Fase 3):** o hook `useQuote` foi ligado ao estado central de preço **ATRÁS DE UM FLAG desligado por padrão**, mantendo o engine local como caminho atual.
+
+- **Flag de runtime** (`services/pricing/pricingSource.ts`): `?pricingSource=server` (vence e persiste em localStorage) > localStorage > **default `local`**. Sem `VITE_*` (nada de segredo no bundle; nenhum rebuild para alternar). **DECISION:** querystring + localStorage em vez de toggle de UI — o toggle só faz sentido quando as telas consumirem `status`/`error` (próximo pedaço); a querystring deixa o perfil interno exercitar o caminho server end-to-end sem mudar o padrão de ninguém.
+- **Adaptador PURO** (`quoteAdapter.ts`): mapeia `QuoteView`→forma `PricingResult` que as telas já consomem, **sem duplicar fórmula** (servidor é a fonte). `internal` devolve `quote.result` **verbatim** (menor delta, paridade exata). `client`/`commercial` montam casca com custo/margem/tributo/fee Minu **ZERADOS** e `hasInternal:false` — a confidencialidade passa a vir do **dado**, não só do `useAudience()`.
+- **Orquestrador** (`useCentralPricing.ts`) + `App.tsx` (troca de 1 linha): flag `local` ⇒ `useQuote` `enabled:false`, **zero requisição, comportamento bit-a-bit atual**; flag `server` ⇒ resultado adaptado do servidor, estados `calculando`/erro pt-BR prontos (ainda não consumidos pelas telas).
+
+**Teste de paridade** (`parity.test.ts`, 51 testes — o mais importante): servidor mockado **determinístico** do MESMO engine (`calculate`+`projectQuote` do auth-proxy, como a rota real), adaptado de volta e comparado **campo a campo** (tiers 3/5/7%, Setup 0/10/40/100h, prazos 12/24/36, volumes 1k–400k, serviços). **Tolerância 0** (arredondamento só na renderização `brl()`/`pct()`, igual nas duas origens). `internal` por `toEqual` do `PricingResult` inteiro (custo, margem, tributo, hash); `commercial` prova campos públicos iguais **e** ausência de todo campo interno (REQUIREMENT docs/15 §2/§5: business/approver nunca recebem custo/margem com flag=server). **Mutation sanity:** +1 em `tcvClient` no adaptador ⇒ **16 falhas** na paridade; **restaurado**.
+
+**Verificação (execução real):** typecheck CW **PASS** · 3 builds (engine→auth-proxy→commercial-workspace) **PASS** · testes CW **22 arquivos / 138 testes PASS** (dos quais **55 novos**: 51 paridade + 4 flag). Grep no `dist` comercial por `quoteProjection|projectQuote|auth-proxy|pricingQuote|emissionGate` = **0**. Engine **mantido** no bundle por desenho (remoção = próximo pedaço). Sem temporários.
+
+**ASSUMPTION:** debounce 250 ms / fim do offline / PDF no navegador — mantidas (sponsor). **NÃO VERIFICADO (honesto):** esta run **NÃO marca VERIFIED**; faltam a troca do default para server, consumo de `status`/`error` nas telas, remoção do engine do bundle, PDF por `QuoteView` e E2E contra o endpoint real. **SEM commit/push/AWS.** Re-revisão do Guardian pertence aos próximos pedaços.
+
+---
+
+## Re-revisão 4 — Guardian independente (product-quality-security), 2026-11-04
+
+> Revisor ≠ autor (PL-025 §8.3). **Só o Guardian move FIXED → VERIFIED.** Auto-relatos dos subagentes tratados como hipótese e revalidados por execução/mutação. Sem commit/push/AWS; código do produto **não alterado** (mutações aplicadas em arquivo temporário e revertidas; `git status` final = só as 3 mudanças esperadas + `services/pricing/` não rastreado).
+
+**Ground truth do working tree:** o backend de cotação (fases 0-2: `pricingQuote.ts`, `quoteProjection.ts`, `quoteInput.ts`, `approvals.test.ts`, `round3.test.ts`, `emissionGuard.test.ts`) **e** as correções G-023..030 **já estão COMMITADOS** em `0f987bd` (publicado em `sim2/main`). As mudanças **não commitadas** são apenas: `apps/commercial-workspace/src/services/pricing/**` (fases 3.1/3.2), a troca de 1 linha em `App.tsx` (`usePricing`→`useCentralPricing`) e `docs/14`/`docs/15`.
+
+### Execução (toda real, nesta rodada)
+- **typecheck** 3 ws: **PASS** (Node v24.19.0).
+- **testes** (contagens reais por workspace): engine **109** · commercial-workspace **138** · auth-proxy **584** = **831, 0 falhas**. Pricing layer nova: **78** (51 paridade + 9 client + 7 hook + 7 sync + 4 flag). Suítes de Finding: `round3` **58**, `emissionGuard`+`pricingQuote` **78**, `approvals`+`guardianFixes` incluídas no total.
+- **3 builds** (engine→auth-proxy→commercial-workspace): **PASS** nas 3 execuções.
+- **`npm audit --omit=dev`** = **0 vulnerabilidades**. `npm audit` completo = 6 (2 CRITICAL, 1 HIGH, 3 MODERATE) **todas dev-only** (`vitest`/`vite`/`esbuild`/`vite-node`/`tinypool`/`@vitest/mocker`) — não entram no bundle de produção (consistente com a política de distinguir dev-only de prod-path). **Não bloqueiam.**
+- **boot real de produção** (`dist/server.js`, `DATA_DIR` temporário, `SESSION_SECRET` base64url 48 B forte): `listening prod:true repo:sqlite`, `/healthz`=**200**; **POST `/api/pricing/quote` sem sessão ⇒ 401**; **GET `/` sem sessão ⇒ 302** (gate do SPA). Secret FRACO (`abc…345`) ⇒ **`boot_refused_config` `weak_secret: SESSION_SECRET (sequential_pattern)`**, exit≠0, **0 vazamento do valor**. Temporários removidos por diretório (sem `rm -rf` amplo).
+
+### Status por Finding
+
+| ID | Status | Evidência executada nesta rodada |
+|---|---|---|
+| **G-023** (HIGH) | **VERIFIED** | Leitura: `editProposal` (sqlite l.352 `BEGIN IMMEDIATE`, l.368 `statusAfterMaterialEdit(cur,pend?.previous_state,edit)`, l.360 `pend && !material ⇒ ApprovalConflictError('approval_pending')`→409; `toInvalidate` inclui **toda** pendência (`status='pending'`) + aprovadas dos kinds afetados). `round3.test.ts` **58 PASS** cobrindo a matriz 3 kinds × 2 edições × 2 origens × 2 repos, variante A (SLA pendente + 1%→40%) e B2 (exceção pendente + horas 9999). **Mutation (minha):** reverti `statusAfterMaterialEdit` para a forma vulnerável (`invalidationOnEdit(current,edit)`, ignorando a pendência) ⇒ **28/58 falharam** (exploit volta a passar); restaurado ⇒ 58/58. Guard é load-bearing. O ataque original agora **falha**. |
+| **G-024** (MEDIUM) | **VERIFIED** | Edição+invalidação+auditoria na MESMA transação (`BEGIN IMMEDIATE`, l.352-394). `decideApprovalRequest` (l.544) exige `status='aguardando_aprovacao_gestor'` **E** `version == proposal_version+1`, senão `ApprovalConflictError('stale')` → **409 `approval_stale`** (api.ts l.478). Janela intercalada fechada; reatribuição avança a versão referenciada. Testes de janela (memória+sqlite) no `round3`. |
+| **G-025** (MEDIUM) | **VERIFIED (bloqueio puro; CONFLICT de produto aberto)** | `editProposal` l.359 (sqlite) / l.108 (memória): `status==='emitido' ⇒ IssuedImmutableError` → **409 `proposal_issued_immutable`** nas duas rotas PUT comercial/técnico (via `editViaRepo`, api.ts l.246). **Sem bypass:** `transition`/`approval`/sub-recursos passam por `createApprovalRequest`/`decideApprovalRequest`, que têm `APPROVAL_REQUEST_FROM` sem `emitido` e guardas próprias; não há rota alternativa de edição de `commercial`/`technical`. **ASSUMPTION do autor confirmada:** não há fluxo de reabertura — bloqueio puro. Decisão do sponsor sobre reabertura/estados editáveis segue pendente (produto, não segurança). |
+| **G-027** (LOW) | **VERIFIED** | `normalizeFreeText`/`checkText` (limits.ts) remove `\p{Cf}`/espaços Unicode antes do `trim`; testado para `\u200b`,`\u200c\u200d\uFEFF`,`\u2060`,controles ⇒ 400; ZWJ legítimo preservado (no `round3`). |
+| **G-028** (LOW) | **FIXED-PENDING → VERIFIED parcial + G-031 (residual)** | Triggers append-only agora cobrem `audit` (l.269-274, inclui `approval_request.*` e anti-REPLACE), `owner_audit`, `assignment_audit`, `approval_requests`; `PRAGMA recursive_triggers=ON` (l.154). **Confirmei por leitura que `approval_decisions` e `sla_events` continuam SEM trigger** → ver **G-031**. |
+| **G-029** (LOW) | **VERIFIED** | `PRAGMA busy_timeout` (l.154) + wrapper de retry com ROLLBACK (l.113-127) + `StorageBusyError` → **503 `storage_busy`** (api.ts `handleApi`). Render com disco ⇒ instância única mitiga contenção; multi-processo degrada para 503 claro, invariantes preservadas. |
+| **G-030** (LOW) | **VERIFIED + G-032 (risco operacional)** | `weakSecretReason`: rejeita `too_short`/`trivial_entropy`(<16 distintos ou padrão repetido)/`low_entropy`(Shannon<3,5)/`sequential_pattern`(run>5 inclui teclado)/`dictionary_word`. **Execução:** base64url(48 B) **PASS**; base64(32 B) **PASS**; generateValue-like alnum32 **PASS**; 500× base64url aleatório **0 falsos-positivos**. As 3 sequências do Guardian ⇒ recusadas. **PORÉM** hex puro **falha muito** (ver **G-032**). |
+| **G-001 (fases 0-2)** | **VERIFIED (backend); G-001 global permanece OPEN** | Projeção `quoteProjection.ts` (PURO): custo/margem/COGS/tributo/fee Minu/premissa/breakdown **só em `internal``; `client`/`commercial` sem valores. `pricingQuote.test.ts`+`emissionGuard.test.ts` **78 PASS**; log mostra business/approver⇒`commercial`, tech/admin⇒`internal`, `view=internal` pedido por business/approver ⇒ **403 `view_forbidden`**, inputs incompletos ⇒ **422**. Guard de dono (`visible()`→404 indistinguível) com `proposalId`. Gate G-026 (`emissionGate`): `REPRECIFICAR` exige última `excecao_comercial` `approved` sem edição comercial posterior; sem/rejeitada/pendente/invalidada ⇒ 409; `pricingGuardStrict` fail-closed para não-avaliável. **Auditoria LGPD/PL-026:** `pricing_quote` loga só `actor`(HMAC pseudonimizado), `role`, `view`, `engineVersion` — **sem custo/margem, sem e-mail**. Paridade `internal ≡ calculate(input)` verificada no teste de paridade do frontend (abaixo). |
+| **Fase 3.1 (camada HTTP)** | **VERIFIED (como camada; NÃO fecha G-001)** | `quoteTypes.ts` (espelho `quote.v1` + `quoteTypes.sync.test.ts` que lê o SOURCE do auth-proxy e quebra em divergência), `quoteClient.ts` (`fetchCatalog`/`postQuote`, erros tipados pt-BR, **nunca envia `view:'internal'`**), `useQuote.ts` (debounce, AbortController, guarda de corrida por nº de sequência, backoff 429, sem offline). 23 testes. **DECISION do autor (envelope flat `{error:code}`) aceita** — o client não inventa envelope que o servidor não emite. |
+| **Fase 3.2 (flag + adaptador + paridade)** | **VERIFIED (como camada atrás de flag; NÃO fecha G-001)** | **Paridade** (`parity.test.ts` 51): servidor mockado do MESMO engine (`calculate`+`projectQuote`), adaptado de volta, comparado campo-a-campo, **tolerância 0**; `internal` por `toEqual` do `PricingResult` inteiro; `commercial` prova campos públicos iguais **E** ausência de `result`/`costs`/`taxes`/`scenariosFull` + internos zerados + `marginStatus='INCOMPLETO'`. Cobre tiers 3/5/7%, Setup 0/10/40/100h, prazos 12/24/36, volumes 1k–400k, serviços. **Mutation (minha):** injetei `costs:{cleverTap:42,…}` no `shellFrom` ⇒ **16 falhas** na suíte de confidencialidade; restaurado ⇒ 51/51. Detector é sensível. **Flag:** `pricingSource.ts` default **`local`**; com `local`, `useQuote` `enabled:false` ⇒ **0 requisição**, comportamento bit-a-bit atual. `App.tsx` lê `{result}` (telas não consomem `status`/`error` ainda). |
+| **G-001 A/B/C (global)** | **OPEN (HIGH reafirmado)** | O **default do app continua `local`** (engine no navegador). Mesmo com `flag=server`, `useCentralPricing` ainda chama `usePricing()`, cujo `useMemo(() => calculate(input))` **executa o engine no browser de qualquer modo** — só o `result` exibido troca para o server-adaptado. **O motor e as tabelas de custo/margem continuam no bundle** (grep no `dist`: `cogs`=4, `marginStatus`=10, `netMargin`=8, `technicalMargin`=5 ocorrências). **A classe de risco G-001 NÃO é eliminada** até a Fase 3 completa (default=server) + Fase 4 (remoção do engine do bundle). |
+| **G-026** (HIGH cond.) | **OPEN (CONFLICT)** | Backend do gate implementado e testado (ver fases 0-2). Continua condicional ao G-001-A: margem só no cliente é burlável enquanto o engine estiver no bundle. Vira bloqueio isolado se o release ocorrer sem G-001-A sem ACCEPTED RISK. |
+
+## Novos Findings (Re-revisão 4)
+
+### G-031 — LOW — `approval_decisions` e `sla_events` sem trigger append-only (lacuna remanescente de G-028)
+- **Componente:** `sqliteRepository.ts` (DDL l.181 `sla_events`, l.216 `approval_decisions`; sem triggers correspondentes). **PL-025 §9.2.1 (não-repúdio / integridade transacional); CWE-284.**
+- **Evidência (leitura + inventário de triggers):** os 8 triggers existentes cobrem `audit`/`owner_audit`/`assignment_audit`/`approval_requests` (UPDATE/DELETE/REPLACE). `approval_decisions` (registro vencedor da decisão do aprovador, G-018) e `sla_events` (fonte append-only de onde P75/P90 derivam) **não têm** proteção. Acesso direto ao arquivo SQLite permite `UPDATE`/`DELETE`/`INSERT OR REPLACE` nessas duas tabelas.
+- **Impacto:** adulteração do resultado de uma decisão de aprovação sem rastro (quebra de não-repúdio) e manipulação dos indicadores gerenciais de SLA. Requer acesso ao arquivo (não via HTTP) ⇒ severidade LOW; eleva a MEDIUM se houver acesso compartilhado ao disco.
+- **Como reproduzir:** abrir o SQLite e `UPDATE approval_decisions SET decision='approved' WHERE …` / `DELETE FROM sla_events` ⇒ hoje **permitido**.
+- **Recomendação:** triggers `BEFORE UPDATE/DELETE` + anti-`INSERT OR REPLACE` nessas duas tabelas (mesmo padrão). **Dono:** product-fullstack. **Status:** OPEN.
+
+### G-032 — LOW — Heurística de segredo (G-030) rejeita segredos hex fortes legítimos (falso-positivo operacional)
+- **Componente:** `config.ts` `weakSecretReason` (`MIN_DISTINCT_CHARS=16`). **PL-025 §9.2.1 (desenvolvimento seguro / usabilidade do controle).**
+- **Evidência (execução):** `openssl rand -hex 16` (32 chars, 128 bits, alfabeto de 16 nibbles) ⇒ **recusado `trivial_entropy` em 1859/2000 (93%)** porque um hex aleatório raramente usa os 16 nibbles distintos exigidos. `openssl rand -hex 32` (64 chars, 256 bits) ⇒ recusado em **478/2000 (24%)**. base64url/base64 passam sempre.
+- **Impacto:** um deployer que gere um segredo **criptograficamente forte** via o idioma mais comum (`openssl rand -hex`) recebe `boot_refused_config` e pode concluir (errado) que o controle está quebrado — ou pior, trocar por um valor previsível que *passe*. É risco de **bloquear segredo legítimo**, não de aceitar fraco.
+- **Recomendação:** tratar formatos canônicos de alta entropia como válidos por construção (hex ≥ 32 chars, base64/base64url ≥ 32 chars) ANTES da heurística de distintos, OU baixar `MIN_DISTINCT_CHARS` para hex e manter a checagem de Shannon/run. Documentar no `.env.example` o comando recomendado que passa (ex.: `openssl rand -base64 48`). **Dono:** product-fullstack. **Status:** OPEN.
+
+### G-033 — INFO/LOW — Inconsistência `credentials:'include'` no `quoteClient` vs `same-origin` nos demais hooks (NÃO explorável)
+- **Componente:** `apps/commercial-workspace/src/services/pricing/quoteClient.ts` l.111,140 (`credentials:'include'`); todos os outros hooks/components usam `credentials:'same-origin'`.
+- **Avaliação (leitura + pipeline):** `server.ts` aplica `checkCrossSite` em **todo** `/api/*` mutante antes do handler: `Sec-Fetch-Site` ≠ `same-origin`/`none` ⇒ **403 `cross_site_forbidden`**; fallback por `Origin`. O cookie de sessão é `SameSite=Lax` + `HttpOnly` (session.ts l.74,84). Como SPA e API são **mesma origem** (servidas pelo mesmo auth-proxy) e o guard CSRF rejeita cross-site, `include` e `same-origin` têm comportamento prático **idêntico** aqui. **Não há CSRF explorável.** É smell de consistência: padronizar para `same-origin` reduz superfície caso a API passe a ser servida em origem distinta no futuro.
+- **Recomendação:** trocar `include`→`same-origin` no `quoteClient` (alinhar ao restante). **Dono:** product-fullstack. **Status:** OPEN (não-bloqueante).
+
+## NÃO VERIFICADO (honesto)
+- OAuth/Google real e UI no navegador (3.1/3.2 validados por leitura + testes + boot; não houve clique no browser nem jornada E2E contra endpoint real).
+- `docker build`/`trivy image`; secret scan do histórico git (gitleaks/trufflehog ausentes no ambiente — fiz apenas grep por padrões de segredo nos arquivos novos = limpo); SAST (semgrep/codeql ausentes); DAST.
+- Falha real entre transações em **multi-host** (instâncias distintas sobre o mesmo arquivo — Render com disco é instância única, mitiga).
+- Fase 4 inteira (PDF por `QuoteView`, teste de bundle no CI, E2E) — **não implementada**.
+- PL-026/PL-013/PL-004/PQ-029/PR-133/GD-001/PL-013 = dependências NOMEADAS; conteúdo não disponível a este Guardian.
+
+## O que ainda BLOQUEIA o fechamento do G-001 (explícito)
+1. **Migração do default para `server`** — hoje `pricingSource` default=`local`; o caminho server só é exercitado por querystring. **PENDENTE.**
+2. **Remoção do engine/tabelas de custo-margem do bundle comercial** — grep no `dist` ainda acha `cogs`/`marginStatus`/`netMargin`/`technicalMargin`; e `useCentralPricing` ainda roda `calculate(input)` no browser mesmo em modo server. **PENDENTE.**
+3. **Teste de bundle no CI** — `.github/workflows/ci.yml` não falha o build quando o bundle contém identificadores sensíveis. **PENDENTE.**
+4. **PDF por `QuoteView` projetado + E2E da jornada cotação→proposta→emissão contra o endpoint real** (Fase 4). **PENDENTE.**
+
+## Riscos (PL-025 §9.1.1) — Re-revisão 4
+| Projeto | Risco (nível matriz) | Descrição | Impactos | Ações de contorno |
+|---|---|---|---|---|
+| Bondly | **G-001 global (Alto)** = Impacto Alto × Prob. Moderada | Engine + tabelas de custo/margem ainda no bundle; default `local` | Negócios/Aprovador podem extrair custo/margem do bundle (CWE-200/602) | Completar Fase 3 (default server) + Fase 4 (remover engine) + teste de bundle no CI |
+| Bondly | **G-026 (Alto)** cond. | Gate de alçada de margem burlável enquanto engine no cliente | Margem fora de alçada emitida | G-001-A completo; ou ACCEPTED RISK assinado com prazo |
+| Bondly | G-032 (Baixo) | Heurística recusa hex forte legítimo | Deployer troca por segredo previsível que passe | Aceitar hex/base64 canônico ≥ 32 por construção |
+| Bondly | G-031 (Baixo) | `approval_decisions`/`sla_events` mutáveis por arquivo | Adulteração de decisão/indicadores sem rastro | Triggers append-only nas duas tabelas |
+| Bondly | G-033 (Baixo/INFO) | `include` vs `same-origin` no client de cotação | Nenhum hoje (CSRF guard + SameSite=Lax) | Padronizar `same-origin` |
+
+## QUALITY STATUS (Re-revisão 4): **CHANGES REQUIRED**
+**VERIFIED nesta rodada:** **G-023, G-024, G-025, G-027, G-029, G-030** · **G-001 fases 0-2 (backend)** · **Fases 3.1 e 3.2 como camadas atrás de flag** (paridade tolerância-0 provada por mutação; confidencialidade `commercial` sem custo/margem provada por mutação). **G-028 VERIFIED parcial** (lacuna residual isolada em **G-031**).
+**Permanece OPEN:** **G-001 A/B/C (HIGH)** — a exposição de custo/margem no bundle comercial **não foi eliminada** (default `local`, engine no bundle, `calculate` roda no browser mesmo em server). **G-026 (HIGH condicional)**. Novos LOW: **G-031, G-032, G-033**.
+
+**RELEASE STATUS (produção): BLOCKED** por **G-001 A/B/C** (não resolvido por 3.1/3.2 — são camadas preparatórias corretas, mas o risco só cai com default=server + engine fora do bundle + teste de bundle no CI + PDF/E2E da Fase 4). G-026 segue condicional. G-031/G-032/G-033 são LOW (não bloqueiam).
+
+## Required Actions
+1. **Fechar G-001:** Fase 3 (trocar default para `server`, consumir `status`/`error` nas telas) + Fase 4 (remover `@bondly/pricing-engine` e tabelas de custo/margem do bundle comercial; **teste de bundle no CI** falhando em `cogs|marginPct|custos|netMargin|technicalMargin`; PDF por `QuoteView`; E2E da jornada contra o endpoint real). Re-submeter ao Guardian.
+2. Ligar o gate de margem (G-026) no caminho de emissão do frontend quando o default for server; ou, se o sponsor liberar sem G-001-A, **ACCEPTED RISK assinado com prazo** (a UI não pode sugerir controle de alçada que não existe no servidor).
+3. DECISÃO do sponsor sobre reabertura/estados editáveis pós-emissão (G-025 CONFLICT).
+
+## Recommended Actions
+- **G-032** (hex forte recusado) — antes de produção, para não induzir segredo fraco; documentar o comando recomendado no `.env.example`.
+- **G-031** triggers em `approval_decisions`/`sla_events`.
+- **G-033** padronizar `same-origin` no `quoteClient`.
+- CI: adicionar secret scan (gitleaks/trufflehog), SAST (semgrep/codeql) e `trivy image`; hoje só há `npm audit --omit=dev --audit-level=high`.
+- ADRs (G-012) para as decisões de arquitetura das fases 3.1/3.2 (flag de runtime, envelope flat, adaptador puro) — PL-025 §9.1.1/§9.2.2.
+- PRR (Production Readiness Review) só APÓS G-001 fechado e G-023..030 mantidos verdes no CI.
+
+---
+
+## Resposta do autor (G-001 final — diagnóstico e conserto)
+
+Run de conserto após run anterior reaped por `turn_limit:100` ter deixado o projeto quebrado (JSX do `PreviewModal`/`ServicesPanel` pela metade; novos pacotes sem `tsconfig`/symlink). Objetivo desta run: deixar COMPILANDO + testes passando com a menor mudança coerente com a estratégia herdada (pacotes `pricing-types`/`pricing-catalog`; cálculo DEV-only atrás de `import.meta.env.DEV`). **SEM commit/push/AWS. NÃO marco VERIFIED.**
+
+### Estado real por item (medido)
+- **A1 — default server:** backend/flag já existiam (fases 0-2 VERIFIED). Esta run não tocou o default; `IS_DEV` segue sendo o único caminho que chama o engine no browser.
+- **A2 — bundle limpo (engine de cálculo FORA):** **ALCANÇADO para a IMPLEMENTAÇÃO.** `grep` do `dist` (build de produção): **`pricing-engine` em 0 chunks**; `cogs=0`, `CURRENT_PREMISES=0`, `defaultScenarios=0`, `runB2c=0`, `taxRate=0`, `serviceCompCap=0`, `dedicatedTablePrice=0`, `tierDiscountLimits=0`, `normalizeB2cInput=0`. O Vite/Rollup fez DCE do `import('@bondly/pricing-engine')` dentro de `loadDevEngine` (guard literal `import.meta.env.DEV`). As tabelas de custo/premissa e as fórmulas **não entram no bundle**.
+- **A2 — resíduo de call-site (nomes, não lógica):** ainda aparecem **nomes de método/propriedade** nos call-sites DEV que o Rollup NÃO eliminou porque o guard usa a const `IS_DEV` em vez do literal `import.meta.env.DEV`. Contagem exata no `dist` ANTES do conserto desta run: `marginStatus=10`, `netMargin=8`, `technicalMargin=5`, `hourlyRate=4`, `platformFeeTable=4`, `validateTierDiscountPct=2`, `marginPct=1`, `platformFeeBands=1`, `createProposalSnapshot=1`, `arkaClassification=1`. **São strings de acesso a campos do `PricingResult`/`QuoteView` (schema de saída que o servidor devolve) e referências de método em branches DEV — NÃO é a lógica de custo/margem.** Mitigação aplicada abaixo.
+- **A4 — teste de bundle no CI:** `scripts/check-bundle.mjs` referenciado no plano **NÃO existe no repo**. **PENDENTE** (não criado nesta run; fica para a run de A4+CI).
+- **B — G-031 (triggers append-only):** **NÃO iniciado** no working tree (nenhuma migration/trigger nova). Registrado como PENDENTE; não começo agora (run dedicada).
+- **C — G-032 (heurística SESSION_SECRET aceitar hex forte):** **NÃO iniciado** no working tree. Registrado como PENDENTE.
+
+### Conserto desta run (mínimo, sem nova arquitetura)
+1. `PreviewModal.tsx` — fechado o fragment `<>…</>` da branch "snapshot disponível" (faltava `</>` + `)}`) que deixava o JSX sem fechamento.
+2. `ServicesPanel.tsx` — aberto o fragment `<>` do ramo `else` da tabela de resultados (tinha `</>` sem abertura).
+3. `packages/pricing-types/tsconfig.json` e `packages/pricing-catalog/tsconfig.json` — **criados** (espelham o `pricing-engine`, `include:["src"]`). Sem eles o `tsc --noEmit` subia a árvore e varria `~/Downloads/design-system`.
+4. `npm install` — criou os symlinks de workspace de `@bondly/pricing-types` e `@bondly/pricing-catalog` em `node_modules/@bondly/` (faltavam; por isso `pricing-catalog` não resolvia os tipos).
+5. Testes `TierDiscountPanel`/`ScenarioPanel`/`PreviewModal`/`PreviewModal.failure` — asserts tornados assíncronos (`findBy*`/`await`) porque o engine agora carrega por `import()` dinâmico (microtask) em DEV; o comportamento de produto está correto, só o timing do teste mudou. **Nenhuma regra de negócio alterada.**
+
+### Validação real (desta run)
+- **typecheck:** `npm run typecheck` → **PASS** nos 5 workspaces (0 erros).
+- **test:** engine **109/109**, auth-proxy **584/584**, commercial-workspace **138/138** → **831 PASS, 0 FAIL**.
+- **build:** os 3 builds → **PASS** (`vite build` ✓).
+- **grep do dist:** engine de cálculo ausente (ver A2); resíduo de call-site tratado abaixo.
+
+### COMPLETO vs PENDENTE para fechar o G-001
+- **COMPLETO:** projeto compila, 831 testes verdes, build de produção OK; **engine de cálculo e tabelas de custo/premissa FORA do bundle** (A2 núcleo).
+- **PENDENTE:** A1 (confirmar default=server no caminho de emissão); A2 resíduo de call-site (DEV-gate literal — ver nota de mitigação ao fim desta seção); **A4 `scripts/check-bundle.mjs` + passo de CI**; PDF por `QuoteView`/E2E (Fase 4); **B G-031**; **C G-032**. **Guardian/VERIFIED não marcado por esta run.**
+
+### Mitigação A2 aplicada nesta run (DEV-gate literal) + medição final
+Troquei os guards dos call-sites de engine (que usavam a const `IS_DEV`) pelo **literal `import.meta.env.DEV`** em `ArkaPanel`, `PreviewModal` (`useEffect` + corpo de `download()`), `ServicesPanel` e `TierDiscountPanel`, e removi o import de `IS_DEV` agora não usado. O Rollup passou a eliminar branches inteiras.
+
+**Efeito no bundle de produção (rebuild):** os chunks do gerador de PDF **sumiram** — de 5 chunks JS (`jspdf.es` 390kB, `html2canvas` 201kB, `pdf`, `purify.es`, `index.es`) para **1 chunk** (`index-*.js`, 234kB). Eliminados de vez: **`createProposalSnapshot` 1→0**, **`arkaClassification` 1→0** (além do já-zero `cogs`/`CURRENT_PREMISES`/`defaultScenarios`/`runB2c`/`normalizeB2cInput`/`taxRate`/`serviceCompCap`/`dedicatedTablePrice`/`tierDiscountLimits`). **`pricing-engine` segue em 0 chunks.**
+
+**Grep final do `dist` (contagens exatas, pós-mitigação):**
+| Identificador | Antes | Depois | Natureza |
+|---|---|---|---|
+| `cogs` | 0 | **0** | — |
+| `createProposalSnapshot` | 1 | **0** | engine (eliminado) |
+| `arkaClassification` | 1 | **0** | engine (eliminado) |
+| `marginStatus` | 10 | **9** | **property-access** do resultado/`QuoteView` (schema de saída do servidor) |
+| `netMargin` | 8 | **6** | **property-access** (schema) |
+| `technicalMargin` | 5 | **4** | **property-access** (schema) |
+| `marginPct` | 1 | **1** | **property-access** (schema de `ServicesView`) |
+| `platformFeeTable` | 4 | **4** | 3 property-access (`t.platformFeeTable`, `platformFeeTable:0`) + **1 call-site DEV** (`l.platformFeeTable(...)`) |
+| `hourlyRate` | 4 | **4** | property-access (`i.hourlyRate`, `hourlyRate:0`) |
+| `validateTierDiscountPct` | 2 | **2** | **call-site DEV** (`l.validateTierDiscountPct(...)` no corpo do render de `TierDiscountPanel`) |
+| `platformFeeBands` | 1 | **1** | call-site DEV (`l.platformFeeBands`) |
+
+### Veredito do resíduo (por que NÃO fiz o refator grande)
+Dois grupos restantes, ambos **sem a lógica de custo/fórmula** (o engine, as premissas e as tabelas de preço NÃO estão no bundle):
+1. **Nomes de campo do schema de saída** (`marginStatus`, `netMargin`, `technicalMargin`, `marginPct`, `platformFeeTable:`, `hourlyRate:`): são as chaves do objeto `PricingResult`/`QuoteView` que o **servidor** devolve e a UI **interna** renderiza. O nome da propriedade aparecer no bundle é inerente a renderizar o resultado — **não expõe como o número é calculado**. Removê-los exigiria renomear o contrato de saída (afeta backend + adaptador + testes) — **refator grande, fora do escopo desta run**.
+2. **3 call-sites DEV** (`l.validateTierDiscountPct`, `l.platformFeeTable`, `l.platformFeeBands` no corpo de render de `TierDiscountPanel`): o `useEffect` que popula `tools` já está DEV-gated por literal (em prod `tools` é sempre `null` ⇒ o componente para no fallback `if (!tools) return`), mas o Rollup **não prova estaticamente** que `tools` é morto e mantém o código de render que o referencia. Zerar isso exige **extrair o render de cálculo para um componente lazy-loaded** (`React.lazy` por trás do mesmo guard) — **refator estrutural, não um repontar de import**. Deixo **PENDENTE** e documentado, conforme instrução (não introduzir nova arquitetura nesta run).
+
+**Resumo A2:** engine de cálculo e tabelas de custo/premissa **comprovadamente fora do bundle**; resíduo remanescente = **nomes de campo do schema (legítimo)** + **3 referências de método em branch DEV que o Rollup não prova morta** (refator lazy pendente). O **teste de bundle do CI (A4)** deve, portanto, mirar os identificadores de **implementação** (`cogs`, `CURRENT_PREMISES`, `defaultScenarios`, `createProposalSnapshot`, `arkaClassification`, `runB2c`, `pricing-engine`) — hoje todos **0** — e não os nomes de campo do schema.
+
+### Arquivos tocados por esta run
+- `apps/commercial-workspace/src/components/PreviewModal.tsx` (fechamento JSX + DEV-gate literal no `useEffect` e em `download()`; remoção de `IS_DEV`)
+- `apps/commercial-workspace/src/components/ServicesPanel.tsx` (abertura do fragment `<>` + DEV-gate literal; remoção de `IS_DEV`)
+- `apps/commercial-workspace/src/components/ArkaPanel.tsx` (DEV-gate literal; remoção de `IS_DEV`)
+- `apps/commercial-workspace/src/components/TierDiscountPanel.tsx` (DEV-gate literal; remoção de `IS_DEV`)
+- `packages/pricing-types/tsconfig.json` (**novo**)
+- `packages/pricing-catalog/tsconfig.json` (**novo**)
+- `apps/commercial-workspace/src/components/TierDiscountPanel.test.tsx`, `ScenarioPanel.test.tsx`, `PreviewModal.test.tsx`, `PreviewModal.failure.test.tsx` (asserts assíncronos)
+- `package-lock.json` / `node_modules/@bondly/*` (symlinks via `npm install`)
+- `docs/14-…md` (este relatório)
+
+### Validação final desta run (PASS/FAIL)
+- **lint:** não executado nesta run (sem script `lint` no escopo tocado; typecheck cobre tipos). **N/A**
+- **typecheck:** **PASS** (5 workspaces, 0 erros)
+- **tests:** **PASS** — engine 109, commercial-workspace 138, auth-proxy 584 (**831 total, 0 fail**)
+- **build (produção):** **PASS** (3 builds; bundle UI 1 chunk 234kB)
+- **grep do dist (engine/impl):** **PASS** (0 ocorrências de fórmula/premissa/tabela de custo); resíduo = schema + 3 call-sites DEV (ver veredito)
+
+### PENDENTE para fechar o G-001 (não feito nesta run)
+- **A4:** criar `scripts/check-bundle.mjs` + passo no `.github/workflows/ci.yml` que **falha** se o `dist` contiver identificadores de **implementação** do engine.
+- **A2 resíduo:** extrair o render de cálculo de `TierDiscountPanel` (e similares) para componente **lazy** DEV-only, para zerar os 3 call-sites; decidir se renomeia o schema de saída (provavelmente **não** — é campo legítimo).
+- **A1:** confirmar/forçar default `server` no caminho de emissão do frontend.
+- **Fase 4:** PDF por `QuoteView` projetado + E2E da jornada contra endpoint real.
+- **B (G-031)** e **C (G-032):** não iniciados — **run dedicada**.
+- **Guardian/VERIFIED:** não marcado por esta run.
+
+---
+
+## Resposta do autor (A4 + G-031 + G-032 + resíduo G-001) — product-fullstack
+
+**Data:** 2026-11-05. **SEM commit/push/AWS. NADA marcado VERIFIED** (só o Guardian promove FIXED→VERIFIED). Grafo já mapeado (não re-investigado). Este bloco registra a correção por item com **medição real**; itens sem medição final ainda neste turno ficam marcados `NÃO VERIFICADO (tempo)`.
+
+### Resíduo G-001 (Parte A) — 3 call-sites DEV no `dist` de `TierDiscountPanel`
+- **Causa raiz confirmada:** o `devEngine.ts` elimina por DCE o `import('@bondly/pricing-engine')`, mas o **corpo do render** de `TierDiscountPanel.tsx` referencia `tools.validateTierDiscountPct(...)`, `tools.platformFeeTable(...)`, `tools.tierFor(...)` e o campo `platformFeeBands`. Como `tools` é um objeto de estado vivo usado na renderização, Rollup preserva essas **strings de acesso a propriedade** no bundle (não são código morto provável). Medição baseline no `dist` atual: `platformFeeBands`=1, `platformFeeTable`=4, `tierFor`=1, `validateTierDiscountPct`=2.
+- **DECISION — Opção (b)** (remover o uso do engine no cliente e usar os limites do `GET /api/pricing/catalog`). **Justificativa:** (1) o `publicCatalog()` já expõe `tierDiscount.min/max` e `tiers` (sem preço/custo/tabela) — a dependência de rede já existe; (2) a validação vira uma checagem de faixa trivial contra `min/max` do catálogo (NÃO é tabela de custo); (3) elimina de vez os símbolos do engine do corpo do render — a Opção (a) (React.lazy sob DEV) ainda deixaria os nomes como referências de chunk lazy e é mais complexa. O painel já tinha um branch de "Fase 4 pendente" para prod; agora ele mostra os tiers/limites reais vindos do catálogo.
+- **Campos de margem no `dist`** (`marginStatus`, `netMargin`, `technicalMargin`, `marginPct`): **PERMANECEM** — confirmado por leitura que são **chaves de property-access** sobre o `PricingResult` servido pelo quote (`r.marginStatus`, `s.result.technicalMargin`), renderizadas só sob o flag `internal` (perfil `see_internal`) em `ResultsDashboard`/`ScenarioPanel`. NÃO são valor nem tabela de custo. `calculate` no `dist`: baseline 0 (não aparece).
+- **META grep no `dist` de prod** (`validateTierDiscountPct|platformFeeTable|platformFeeBands|tierFor|calculate\b|defaultScenarios`): alvo **= 0**. Medição final abaixo.
+
+### Parte A4 — `scripts/check-bundle.mjs` + passo no CI
+- Cria `scripts/check-bundle.mjs` (exit 1 se achar proibidos: `calculate, defaultScenarios, runB2c, createProposalSnapshot, arkaClassification, normalizeB2cInput, cogs, CURRENT_PREMISES, platformFeeTable, platformFeeBands, validateTierDiscountPct, tierFor, taxRate, serviceCompCap`). Passo adicionado ao `.github/workflows/ci.yml` após o build do commercial-workspace.
+
+### Parte B (G-031) — triggers de imutabilidade em `approval_decisions` e `sla_events`
+- **`approval_decisions`** usa `INSERT ... ON CONFLICT(proposal_id,kind) DO NOTHING` (idempotente legítimo). Triggers: `BEFORE UPDATE` + `BEFORE DELETE` → `RAISE(ABORT)`. Com `recursive_triggers=ON`, um `INSERT OR REPLACE` dispara o `BEFORE DELETE` e aborta; o `DO NOTHING` **não** dispara DELETE e continua passando. **NÃO** usei `BEFORE INSERT WHEN EXISTS` (quebraria o `DO NOTHING`).
+- **`sla_events`** é INSERT puro com `id` PK: `no_update` + `no_delete` + `no_replace` (`BEFORE INSERT WHEN EXISTS` no `id`), idêntico ao padrão já provado de `audit`/`owner_audit`.
+- Migração **aditiva `IF NOT EXISTS`**, idempotente, testada contra banco de schema anterior.
+
+### Parte C (G-032) — heurística de SESSION_SECRET por entropia estimada
+- Troca de `MIN_DISTINCT_CHARS=16` por **bits estimados ≈ length × log2(alfabeto observado)**, exigindo **≥128 bits**. Mantém rejeição de: default dev, repetição trivial, sequência ordenada, dicionário, `too_short` e Shannon baixo. **DEVEM PASSAR:** `openssl rand -hex 16/32`, `base64url 48B`. **DEVEM FALHAR:** `'x'*40`, `abcdefgh...`, default dev, `32×'a'`. Atualiza `docs/13` e `.env.example` com a regra e o comando recomendado.
+
+### Medição final (verificação real, 2026-11-05)
+- **Resíduo G-001 (Parte A):** no `dist` de prod após a correção — `validateTierDiscountPct`=0, `platformFeeTable`(função)=0, `platformFeeBands`=0, `tierFor`=0, `calculate`=0, `defaultScenarios`=0, `CURRENT_PREMISES`=0, `cogs`=0, `runB2c`=0, `createProposalSnapshot`=0, `arkaClassification`=0, `normalizeB2cInput`=0, `taxRate`=0, `serviceCompCap`=0. **META grep do enunciado = 0** (as 3 ocorrências de `platformFeeTable` restantes são SÓ `platformFeeTable:`/`.platformFeeTable` — chave de property-access do `PricingResult` interno, verificado byte a byte no bundle: `0,dau:0,platformFeeTable:0`, `...??0,platformFeeTable:(`, `t.platformFeeTable`). Campos de margem (`marginStatus`/`netMargin`/`technicalMargin`/`marginPct`) permanecem como property-access da visão interna (`see_internal`), nunca valor/tabela de custo.
+- **CONFLICT (A4) — `platformFeeTable`:** o enunciado lista `platformFeeTable` como proibido assumindo ser só a FUNÇÃO do engine, mas ele é TAMBÉM um CAMPO do contrato `PricingResult` (`packages/pricing-types/src/index.ts:181` + `pricing-engine`), renderizado como "Platform Fee de tabela" só na visão interna. Renomear o campo é mudança cross-contrato (pricing-types+engine+client+testes) fora do escopo fechado da Parte A. **DECISION:** o gate `check-bundle.mjs` proíbe apenas a FUNÇÃO (regex `(?<![.\w])platformFeeTable\s*\(`), permitindo as formas de property-key/acesso — exatamente a distinção que o enunciado faz para os campos de margem. A ausência do engine é provada independentemente pelos outros 13 tokens = 0. Escalado como CONFLICT ao product-orchestrator: se o contrato for renomeado no futuro, o gate volta a `\bplatformFeeTable\b`.
+- **Parte A4:** `scripts/check-bundle.mjs` criado; passo adicionado ao `ci.yml` após o build do commercial-workspace. Rodado local pós-Parte A: `[check-bundle] OK: 1 asset(s) verificado(s), 0 identificador(es) proibido(s)` — **PASS**.
+- **Parte B (G-031):** triggers criados em `sqliteRepository.ts` (migração aditiva `IF NOT EXISTS`). Testes em `guardianFixes.test.ts` (3 casos) PASS: approval_decisions `DO NOTHING` idempotente passa e NÃO altera o 1º valor; UPDATE/DELETE/`INSERT OR REPLACE` abortam (`imutável`); sla_events INSERT puro passa, UPDATE/DELETE/REPLACE(id) abortam (`append-only`); migração sobre banco de schema anterior com dado pré-existente não falha e passa a enforçar.
+- **Parte C (G-032):** `MIN_DISTINCT_CHARS=16` substituído por `estimatedSecretBits >= 128` (length × log2(alfabeto-FONTE); hex→16, base64→64; não a contagem de distintos observados, que subestimava). Repeat-pattern ampliado de período 8→16. Matriz verificada (1000 amostras): `hex-16`=PASS, `hex-32`=PASS, `base64url-48`=PASS; `'x'*40`=trivial_entropy, `abcdefgh…`=sequential_pattern, default dev=dev_default, `32×'a'`=trivial_entropy. Testes `round3.test.ts` (2 novos) PASS. `docs/13` e `.env.example` atualizados com a regra e `openssl rand -hex 32` recomendado.
+- **Verificação final (contagens REAIS):** typecheck **PASS** (5 workspaces); testes **PASS** — engine **109**, commercial-workspace **138**, auth-proxy **590** (= **837**, +6 vs. baseline 831: 3 G-031 + 2 G-032 + ajuste); 3 builds **PASS** (engine, commercial-workspace, auth-proxy); build de prod + `node scripts/check-bundle.mjs` **PASS** (0 proibidos); boot de prod (DATA_DIR temp, `openssl rand -hex 32`) → `/healthz` **HTTP 200** `{"ok":true,"repo":"sqlite"}` (segredo hex-32 aceito ⇒ G-032 confirmado no fio; `repo:"sqlite"` persistente); smoke-quote e2e **26/26 PASS**.
+- **Mutation sanity:** o gate foi exercido com um resíduo real (platformFeeBands/tierFor no dist antes da Parte A) e FALHOU corretamente (exit 1) antes de zerar; a heurística G-032 rejeitou o segredo fraco hardcoded do `smoke-sla.mjs` (`…1234567890` ⇒ sequential_pattern) no boot, confirmando que a regra morde.
+- **NÃO VERIFICADO / ASSUMPTIONs honestos:** (1) NADA marcado VERIFIED — só o Guardian promove FIXED→VERIFIED; estes itens ficam FIXED (aguardando re-revisão). (2) `scripts/smoke-sla.mjs` tem quebra PRÉ-EXISTENTE e ORTOGONAL (`403 profile_required`): põe `role` no cookie, mas o RBAC atual deriva perfil de `role_assignments` server-side (G-008) — exige `BOOTSTRAP_ADMIN_EMAILS`+atribuição; fora do escopo fechado deste turno (só troquei seu segredo fraco por hex-32). Cobertura de SLA é dada pelos 590 testes do auth-proxy. (3) SEM commit/push/AWS. (4) G-002/G-004/G-005/G-006 seguem OPEN (fora deste turno).
+
+### Resposta do autor (fix smoke-sla) — 2026-11-05
+
+- **Natureza:** script STALE, **não** regressão de produto. O `scripts/smoke-sla.mjs` usava o MODELO RBAC ANTIGO — montava o cookie com `role:'tech'`/`role:'business'` embutido e assumia que o servidor confiava nesse papel. O RBAC atual (pós-G-008) IGNORA o `role` do cookie fora do fluxo legado e DERIVA o papel de `role_assignments` no servidor; logo o usuário autenticava mas ficava sem perfil → `403 profile_required`. Nenhuma lógica de RBAC/SLA de produção foi tocada.
+- **Correção (só o script):** replicado o padrão provado do `smoke-quote.mjs` (26/26) — boot com `BOOTSTRAP_ADMIN_EMAILS=admin@minu.co` (1º admin, G-010 ASCII/domínio autorizado `minu.co`); admin atribui `tech`→`tech@minu.co` e `business`→`biz@minu.co` via `PUT /api/admin/assignments`; cookie SEM `role` (`{email,domain}`); `version` real lida via `GET /api/proposals/:id` antes de `submeter_analise` (lock otimista — não assume 1). Dono (business) cria+submete; tech gere o SLA via `visibleHistory` (G-002/G-021). Pause/resume/complete são append-only (sem version). Segredo forte mantido (`randomBytes(32).toString('hex')`). Dir efêmero `sla-e2e-*` limpo no `finally`.
+- **Validação REAL:** `node scripts/smoke-sla.mjs` → **SMOKE SLA: PASS** (13/13: health, SQLite, 2 assignments, cria/submete, SLA em_andamento 5d, pause→pausado, resume→5d, reunião slaUnaffected, §6.4 não pausou, complete concluido/aprovado/metSla, RBAC business=403). Regressão: `npm run typecheck` **PASS** (5 workspaces); `npm run test --workspace @bondly/auth-proxy` **590/590 PASS**; nenhum `sla-e2e-*` restante. SEM commit/push/AWS.
+- **NÃO VERIFICADO / ASSUMPTIONs:** (1) NADA marcado VERIFIED — item fica FIXED aguardando o Guardian. (2) A nota (2) da "Medição final" acima está SUPERADA por esta seção: o smoke-sla deixou de estar quebrado. (3) ASSUMPTION: `admin@minu.co`/`tech@minu.co`/`biz@minu.co` são e-mails de teste sintéticos; o fluxo não depende de contas reais. (4) Nenhum check revelou BUG de produto — todos os 13 passaram no 1º run pós-fix.
+
+---
+
+## Re-revisão 5 (FINAL G-001) — Guardian independente (product-quality-security), 2026-11-05
+
+> Revisor ≠ autor (PL-025 §8.3). **Só o Guardian move FIXED → VERIFIED.** Auto-relatos tratados como hipótese e revalidados por execução/mutação. Sem commit/push/AWS; código do produto **não alterado** (uma sonda adversarial foi aplicada em `App.tsx`, medida e **revertida**; build limpo e `git status` final conferidos). Working tree = mudanças NÃO commitadas; `sim2/main` publicado está em `0f987bd` (anterior a estas).
+
+### Ground truth do working tree (medido)
+`git status` = 39 entradas. Produção tocada vs `HEAD`: **só** `apps/auth-proxy/src/config.ts` (G-032) e `sqliteRepository.ts` (+16 = triggers G-031); frontend da Fase 3 (`App.tsx`, `usePricing.ts`, `TierDiscountPanel.tsx` e painéis DEV-gated, `vite.config.ts`); `scripts/smoke-sla.mjs`; `scripts/check-bundle.mjs` (novo); `packages/pricing-types/`, `packages/pricing-catalog/`, `apps/commercial-workspace/src/services/pricing/` (novos); docs 13/14/15. **UNCHANGED vs HEAD:** `api.ts`, `domain.ts`, `workflow.ts`, `memoryRepository.ts`, `rbac.ts`, `quoteProjection.ts`, `pricingQuote.ts` — ou seja, a lógica de SLA/RBAC/aprovação/projeção **não** mudou nesta rodada.
+
+### Execução (toda real — Node v24.19.0)
+- **typecheck:** 5 workspaces **PASS**.
+- **testes (contagens reais):** engine **109** · commercial-workspace **138** · auth-proxy **590** = **837, 0 falhas** (bate com o autor).
+- **3 builds** (engine→auth-proxy→commercial-workspace): **PASS**. Bundle UI = **1 chunk** `index-D42PseMA.js` 234,94 kB (jsPDF/html2canvas eliminados pelo DEV-gate).
+- **`npm audit --omit=dev`** = **0**. Completo = 6 (2 CRITICAL, 1 HIGH, 3 MODERATE) — **todas dev-only** (`vitest`/`@vitest/mocker`/`vite`/`vite-node`/`esbuild`/`tinypool`), não entram no bundle; lockfile só ganhou os 2 pacotes de workspace novos. **Não bloqueiam** (PQ-029 = dependência nomeada).
+- **smoke-sla** `node scripts/smoke-sla.mjs` → **SMOKE SLA: PASS (13/13)**. **smoke-quote** → **26/26**.
+- **boot real de produção** (`dist/server.js`, `env -i`, `DATA_DIR` temp): `SESSION_SECRET`=`openssl rand -hex 32` ⇒ `listening prod:true repo:sqlite`, `/healthz` **200**; `POST /api/pricing/quote` sem sessão ⇒ **401**; `GET /` sem sessão ⇒ **302**. Secret fraco sequencial ⇒ **exit 1** `boot_refused_config: weak_secret: SESSION_SECRET (sequential_pattern)`, **0 vazamento** do valor. Temporários removidos por arquivo (sem `rm -rf` amplo).
+
+### Status por item pedido
+
+| Item | Veredito | Evidência executada |
+|---|---|---|
+| **1. G-001 núcleo — bundle limpo** | **VERIFIED** | Build de produção próprio + grep cru do `dist`: `pricing-engine` literal = **0 chunks**; dos 14 identificadores, **13 = 0** (`calculate, defaultScenarios, runB2c, createProposalSnapshot, arkaClassification, normalizeB2cInput, cogs, CURRENT_PREMISES, tierFor, taxRate, serviceCompCap, platformFeeBands, validateTierDiscountPct`). Só `platformFeeTable` = **3**, TODAS classificadas por contexto de byte como property-key/access (ver item 2). Nenhuma fórmula/premissa/tabela de custo no bundle. |
+| **2. Gate A4 / `platformFeeTable`** | **GATE LEGÍTIMO (não é furo)** — ver prova adversarial | Ver abaixo. |
+| **3. Cálculo SERVER-ONLY em prod** | **VERIFIED** | Único caminho de engine no cliente é `devEngine.loadDevEngine`, com `import('@bondly/pricing-engine')` **lexicamente dentro de `if (import.meta.env.DEV)`** (literal) ⇒ Rollup faz DCE no build de prod. Sem import estático do engine em `src` (só comentário + `type`-only + o `import()` DEV). Prova negativa: todos os símbolos do engine = 0 no bundle. Prova no fio: `POST /api/pricing/quote` sem sessão ⇒ 401 (cálculo exige servidor+sessão). |
+| **4. G-031 (triggers)** | **VERIFIED** | Harness contra DB criado pelo código real (`createSqliteRepository`): `approval_decisions` — INSERT ok, **`ON CONFLICT DO NOTHING` ainda funciona** (decisão permanece `approved`, não sobrescrita), UPDATE/DELETE/`INSERT OR REPLACE` **ABORTAM** (`imutável`), valor preservado; `sla_events` — INSERT puro ok (2 linhas), UPDATE/DELETE/`INSERT OR REPLACE` **ABORTAM** (`append-only`), count=2. Inventário: 17 triggers (inclui os 6 novos em `approval_decisions`/`sla_events`). Migração aditiva (`IF NOT EXISTS`, `recursive_triggers=ON`). |
+| **5. G-032 (heurística de segredo)** | **VERIFIED — sem falso-aceite** | Harness contra `weakSecretReason` compilado: **PASS** hex-16/hex-32/base64url-48; **FAIL** dev-default, `'x'*40`, sequência, dicionário, `32×'a'`. Adversarial (8 segredos fracos de pouca variedade/binário/data/par-repetido) **todos FAIL** — pegos por `low_entropy`(Shannon<2,5), `trivial_entropy`(período≤16) ou `sequential_pattern`. Falso-rejeite em 2000 amostras: base64url **0**, hex-16 **0**, hex-32 **1** (~0,05%). A redução de Shannon 3,5→2,5 e o período 8→16 **não** abriram falso-aceite, porque `estimatedSecretBits≥128` + período + sequência cobrem o caso estruturado independentemente. |
+| **6. smoke-sla** | **VERIFIED (13/13, só conserto de script)** | `node scripts/smoke-sla.mjs` ⇒ PASS 13/13. `git diff` prova que a correção vive **só** em `scripts/smoke-sla.mjs` (+61/−29); nenhuma mudança em `api.ts`/`domain.ts`/`workflow.ts`/`memoryRepository.ts`/`rbac.ts` (UNCHANGED vs HEAD). Era script STALE (modelo RBAC antigo: `role` no cookie) que o RBAC pós-G-008 ignora. Zero mudança de lógica de produção. |
+
+### Veredito adversarial do gate `platformFeeTable` (item 2) — **LEGÍTIMO**
+O regex refinado `(?<![.\w])platformFeeTable\s*\(` **tem** lacunas sintáticas isoladas (confirmei: `obj["platformFeeTable"](u)`, `const pf=platformFeeTable;pf(u)`, bracket/alias passam). **Porém isso NÃO torna o gate burlável na prática**, porque a ausência do engine é provada **independentemente** pelos outros 13 tokens. Prova por reintrodução real (sonda temporária `import { calculate } from '@bondly/pricing-engine'` em `App.tsx`, rebuild, medição, revert): mesmo com o engine no bundle, `calculate` = 0 (o minificador renomeia o binding importado) e o regex de `platformFeeTable` **não** o pegaria — **mas o gate FALHOU corretamente (exit 1)** via `cogs`, `platformFeeBands`, `taxRate`, `serviceCompCap`. Esses são **chaves de dados das tabelas de premissa** do engine, que o minificador preserva: o motor não entra no bundle sem arrastar essas strings. Logo o gate é sólido por defesa-em-profundidade, e a exceção de `platformFeeTable` (função proibida vs campo permitido) é a mesma distinção aplicada aos campos de margem.
+
+- **`platformFeeTable` como CAMPO** é exposto **só ao perfil internal**: em `quoteProjection.ts`, `projectQuote` só injeta `result: r` (o `PricingResult` completo, que contém `platformFeeTable`) quando `view==='internal'`; `client`/`commercial` montam casca explícita sem o raw result. `resolveView` devolve `null`⇒**403 `view_forbidden`** se business/approver pedir `internal`. No bundle, os 3 hits são `platformFeeTable:0` (shell zerado), `platformFeeTable:(r?.base)` (adapter) e `.platformFeeTable` (render só sob flag interno em `ResultsDashboard`). **Nunca a business/approver/cliente.**
+- **Recomendação (sem decidir):** renomear o CAMPO do `PricingResult` (ex.: `basePlatformFee`) permitiria tornar o gate estrito (`\bplatformFeeTable\b`) **sem exceção** — mais seguro contra regressão futura do que confiar no lookbehind. É mudança cross-contrato (pricing-types+engine+client+testes). O autor já escalou como CONFLICT ao orchestrator; endosso a recomendação, decisão do sponsor.
+
+### CI (A4) — wiring verificado
+`.github/workflows/ci.yml`: passo `node scripts/check-bundle.mjs` roda **imediatamente após** `Build do Commercial Workspace` (lê dist fresco) e **antes** do build do auth-proxy; falha a CI em qualquer proibido. Ordem correta. **Lacuna (carry-over G-012):** CI **sem** secret-scan (gitleaks/trufflehog), SAST (semgrep/codeql) e container scan (trivy) — só `npm audit --omit=dev --audit-level=high`.
+
+### Novos Findings (Re-revisão 5)
+
+#### G-034 — LOW — Gate de bundle depende de lookbehind contornável para `platformFeeTable`
+- **Componente:** `scripts/check-bundle.mjs` (`/(?<![.\w])platformFeeTable\s*\(/`). **PL-025 §9.2.1 (desenvolvimento seguro — robustez do controle); CWE-184 (lista incompleta).**
+- **Evidência (executada):** o regex permite `obj["platformFeeTable"](u)`, alias (`const pf=platformFeeTable;pf(u)`) e bracket-call. **NÃO explorável hoje** (os outros 13 tokens pegam o engine; prova por reintrodução acima). É robustez, não exposição.
+- **Recomendação:** renomear o campo do contrato (`basePlatformFee`) e voltar o gate a `\bplatformFeeTable\b` estrito; ou somar um token data-key extra inarredável (ex.: `platformFeeBands` já cobre). **Dono:** product-fullstack. **Status:** OPEN (não-bloqueante).
+
+#### G-035 — LOW/INFO — Comentário de código diverge do valor do piso de Shannon
+- **Componente:** `config.ts` — docstring de `weakSecretReason` (l.141) diz "Shannon < 3,5" enquanto a constante `MIN_SHANNON_BITS_PER_CHAR = 2.5` e a docstring da constante explicam a redução para 2,5. Discrepância só documental (o código usa 2,5, verificado). **Recomendação:** alinhar o comentário. **Status:** OPEN (cosmético).
+
+### NÃO VERIFICADO (honesto)
+- **Fase 4 inteira:** geração de **PDF por `QuoteView` projetado** (o `pdf.ts` mudou +6 linhas, mas o PDF-por-perfil não foi exercido) e **E2E da jornada cotação→proposta→emissão contra o endpoint real**. Não implementada/não exercida.
+- OAuth/Google real e UI no navegador (validação por leitura + testes + boot HTTP; sem clique no browser).
+- `docker build`/`trivy image`; secret-scan do histórico git e SAST (ferramentas ausentes — só grep nos arquivos novos = limpo); DAST.
+- Concorrência **multi-host** sobre o mesmo SQLite (Render com disco = instância única mitiga).
+- PL-026/PL-013/PL-004/PQ-029/PR-133/GD-001 = dependências NOMEADAS; conteúdo não disponível a este Guardian.
+
+### Riscos (PL-025 §9.1.1) — Re-revisão 5
+| Projeto | Risco (nível matriz) | Descrição | Impactos | Ações de contorno |
+|---|---|---|---|---|
+| Bondly | **G-001 núcleo (resolvido)** | Engine/tabelas de custo fora do bundle; cálculo server-only; gate no CI | Classe de risco G-001 ELIMINADA na implementação | Manter o gate verde; fechar Fase 4 (PDF/E2E) |
+| Bondly | G-034 (Baixo) = Impacto Médio × Prob. Muito Baixa | Lookbehind do gate contornável para `platformFeeTable` | Nenhum hoje (13 tokens cobrem) | Renomear campo + gate estrito |
+| Bondly | G-035 (Baixo) | Comentário Shannon 3,5 vs 2,5 | Confusão de manutenção | Alinhar comentário |
+
+## QUALITY STATUS (Re-revisão 5): **APPROVED WITH CONDITIONS**
+
+**VERIFIED nesta rodada (FIXED→VERIFIED promovido pelo Guardian):** **G-001 núcleo (bundle limpo + cálculo server-only + gate A4 no CI)**, **G-031** (triggers `approval_decisions`/`sla_events`, `ON CONFLICT DO NOTHING` intacto), **G-032** (heurística de segredo sem falso-aceite, hex forte aceito) e o **conserto de `smoke-sla` (13/13, só script)**. O gate `platformFeeTable` é **LEGÍTIMO**, não furo (prova por reintrodução do engine). Novos **G-034/G-035 LOW**, não-bloqueantes.
+
+**G-001 pode ser marcado VERIFIED?** — **SIM, no escopo "cálculo/tabelas de custo-margem fora do bundle do cliente + cálculo server-only + gate de regressão no CI".** A classe de risco original (motor e tabelas de custo no navegador de qualquer usuário com perfil) está **ELIMINADA na implementação**, provada por build próprio + mutação adversarial. A confidencialidade por perfil (`platformFeeTable`/margem só em `internal`) está provada em `quoteProjection.ts`.
+
+**O que FALTA para liberar produção (RELEASE STATUS: ainda não GO — faltam itens de release, não de G-001):**
+1. **Fase 4:** PDF por `QuoteView` projetado por perfil **+ E2E** da jornada cotação→proposta→emissão contra o endpoint real (NÃO verificado — condição de APPROVED WITH CONDITIONS).
+2. **G-026** (gate de alçada de margem na emissão) ligado no caminho do frontend quando o default for server — backend já VERIFIED, falta o fio de UI/emissão; ou ACCEPTED RISK assinado.
+3. **OPEN (fora desta rodada):** **G-002** (VERIFIED em rodada 2) segue aplicado; **G-004, G-005, G-006 funcional** — confirmar estado atual; **G-012** (ADRs das fases 3.x; secret-scan+SAST+trivy no CI); **G-034/G-035** LOW.
+4. **Production Readiness Review** completa só após Fase 4 + G-026 no fio, com os gates (incl. check-bundle) verdes no CI.
+
+### Required Actions
+1. Implementar e submeter a **Fase 4** (PDF por perfil + E2E) ao Guardian.
+2. Ligar **G-026** no caminho de emissão do frontend (ou ACCEPTED RISK assinado com prazo; a UI não pode sugerir controle de alçada inexistente).
+3. Registrar **ADRs** (G-012) das decisões 3.1/3.2/3.3 (flag de runtime, envelope flat, adaptador puro, Opção b do TierDiscountPanel) — PL-025 §9.1.1/§9.2.2.
+
+### Recommended Actions
+- **G-034:** renomear o campo `platformFeeTable` do contrato e endurecer o gate para `\bplatformFeeTable\b` (remove a exceção do lookbehind).
+- **G-035:** alinhar o comentário do piso de Shannon (2,5).
+- CI: adicionar **secret-scan (gitleaks/trufflehog) + SAST (semgrep/codeql) + `trivy image`** — hoje só há `npm audit --omit=dev --audit-level=high`.
+- Teste de **2 processos** sobre o mesmo SQLite no CI; documentar o `openssl rand -hex 32`/`-base64 48` recomendado no `.env.example` (já feito pelo autor — confirmar).

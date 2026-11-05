@@ -313,6 +313,34 @@ describe('G-030 — heurística de SESSION_SECRET', () => {
       expect(weakSecretReason(randomBytes(32).toString('base64'))).toBeNull();
     }
   });
+  it('G-032 — aceita segredo forte de alfabeto PEQUENO (hex): casos determinísticos', () => {
+    // openssl rand -hex 16 = 32 hex = 128 bits; -hex 32 = 256 bits. Ambos têm poucos símbolos distintos
+    // (a regra antiga de ">=16 distintos" os rejeitava indevidamente). Casos fixos sem run ordenado > 5.
+    expect(weakSecretReason('9f3b1d7a0c6e4825b9d1f0a3c7e25846')).toBeNull(); // 32 hex (128 bits)
+    expect(weakSecretReason('9f3b1d7a0c6e4825b9d1f0a3c7e258469f3b1d7a0c6e4825b9d1f0a3c7e25847')).toBeNull(); // 64 hex (256 bits)
+  });
+  it('G-032 — a imensa maioria de hex aleatório é aceita (só runs incidentais >5 caem)', () => {
+    // Um hex de 64 chars tem ~1/6500 de conter uma corrida ordenada incidental de 6 (ex.: "234567"), que o
+    // detector de sequência recusa de propósito (segredo marginalmente mais fraco; regenerar é grátis).
+    // Exigimos taxa de aceitação alta — não 100% — para não acoplar o teste a esse raro falso-negativo.
+    let accepted16 = 0;
+    let accepted32 = 0;
+    const N = 500;
+    for (let i = 0; i < N; i++) {
+      if (weakSecretReason(randomBytes(16).toString('hex')) === null) accepted16++;
+      if (weakSecretReason(randomBytes(32).toString('hex')) === null) accepted32++;
+    }
+    expect(accepted16).toBe(N); // hex-16 (32 chars): run ordenado >5 é praticamente impossível
+    expect(accepted32 / N).toBeGreaterThan(0.99); // hex-32: ~99,98% aceitos
+  });
+  it('G-032 — recusa alfabeto pequeno/curto por força estimada < 128 bits e periódicos de período 9–16', () => {
+    expect(weakSecretReason('a'.repeat(32))).toBe('trivial_entropy'); // 1 símbolo
+    expect(weakSecretReason('ab'.repeat(16))).toBe('trivial_entropy'); // período 2
+    expect(weakSecretReason('deadbeef'.repeat(4))).toBe('trivial_entropy'); // hex periódico (período 8)
+    expect(weakSecretReason('0123456789abcdef'.repeat(2))).not.toBeNull(); // período 16
+    // hex de 24 chars (96 bits) é curto demais em FORÇA mesmo passando dos 32? não — 24 < 32 chars ⇒ too_short.
+    expect(weakSecretReason('abcdef0123456789abcdef01')).toBe('too_short');
+  });
   it('produção recusa sequência no boot (loadConfig), sem vazar o valor', () => {
     const v = 'abcdefghijklmnopqrstuvwxyz012345';
     const env = { NODE_ENV: 'production', SESSION_SECRET: v, GOOGLE_CLIENT_ID: 'id', GOOGLE_CLIENT_SECRET: 'segredo-real-qualquer', PUBLIC_URL: 'https://x.example' } as NodeJS.ProcessEnv;

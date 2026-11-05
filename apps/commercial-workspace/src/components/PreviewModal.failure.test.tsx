@@ -23,8 +23,8 @@ describe('PreviewModal — falha ao gerar NÃO queima a sequência (§15)', () =
         <PreviewModal input={DEFAULT_INPUT} onClose={() => {}} />
       </AudienceProvider>,
     );
-    // confirma e tenta gerar
-    fireEvent.click(screen.getByRole('checkbox'));
+    // G-001: o checkbox/ações só renderizam após o snapshot (engine, DEV) carregar — espera o render.
+    fireEvent.click(await screen.findByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: /Gerar PDF do cliente/i }));
 
     await waitFor(() => expect(screen.getByText(/Não foi possível gerar o PDF/i)).toBeInTheDocument());

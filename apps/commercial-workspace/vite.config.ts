@@ -14,6 +14,12 @@ export default defineConfig({
       '@bondly/pricing-engine': fileURLToPath(
         new URL('../../packages/pricing-engine/src/index.ts', import.meta.url),
       ),
+      '@bondly/pricing-types': fileURLToPath(
+        new URL('../../packages/pricing-types/src/index.ts', import.meta.url),
+      ),
+      '@bondly/pricing-catalog': fileURLToPath(
+        new URL('../../packages/pricing-catalog/src/index.ts', import.meta.url),
+      ),
     },
   },
   server: { host: '127.0.0.1', port: 5173 },

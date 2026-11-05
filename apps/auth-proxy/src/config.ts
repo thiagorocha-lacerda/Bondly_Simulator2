@@ -51,10 +51,22 @@ export const DEV_SESSION_SECRET = 'dev-session-secret-not-for-production-use';
 export const DEV_CLIENT_SECRET = 'dev-client-secret';
 export const MIN_SESSION_SECRET_LENGTH = 32;
 
-/** G-030: mínimos documentados (docs/10 §segredos). `openssl rand -base64 48` / `generateValue` do Render passam com folga. */
-export const MIN_DISTINCT_CHARS = 16;
-/** Entropia de Shannon empírica mínima (bits/caractere). Aleatório base64 de 32+ chars fica ≈4,3–5,8; sequências/dicionário < 3,6. */
-export const MIN_SHANNON_BITS_PER_CHAR = 3.5;
+/**
+ * G-032: entropia MÍNIMA estimada do segredo, em bits. Trocamos a regra antiga de "16 caracteres distintos"
+ * (que rejeitava `openssl rand -hex 16` — alfabeto hex só tem 16 símbolos possíveis, logo ≤16 distintos) por
+ * uma estimativa de força: bits ≈ comprimento × log2(tamanho do alfabeto observado). 128 bits é o piso de um
+ * segredo criptográfico moderno. `openssl rand -hex 16` (32 chars, alfabeto 16) = 32×4 = 128 bits ✓;
+ * `-hex 32` = 256 ✓; base64url de 48 bytes (64 chars, alfabeto 64) = 384 ✓. Sequências/dicionário continuam
+ * recusados por verificações próprias (não por entropia). `'x'*40` e `32×'a'` têm alfabeto 1 ⇒ 0 bits ✗.
+ */
+export const MIN_ESTIMATED_SECRET_BITS = 128;
+/**
+ * G-032: entropia de Shannon empírica mínima (bits/caractere) — backstop FRACO contra baixa variação.
+ * Rebaixada de 3,5 para 2,5: um `openssl rand -hex 16` uniforme pode cair a ~3,0 bits/char observados (só
+ * 16 símbolos possíveis, ~11–14 aparecendo), então 3,5 rejeitaria hex legítimo. O piso de força real agora é
+ * `estimatedSecretBits >= 128`; o Shannon só derruba cadeias de pouquíssima variação que escapem das demais.
+ */
+export const MIN_SHANNON_BITS_PER_CHAR = 2.5;
 /** Run ordenado (alfabeto/dígitos/linha de teclado, crescente ou decrescente) a partir do qual o segredo é recusado. */
 export const MAX_SEQUENTIAL_RUN = 5;
 const KEYBOARD_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm', '1234567890'];
@@ -67,6 +79,37 @@ export function shannonBitsPerChar(value: string): number {
   let h = 0;
   for (const c of freq.values()) h -= (c / n) * Math.log2(c / n);
   return h;
+}
+
+/**
+ * G-032: tamanho do alfabeto-FONTE (classe de caracteres), não a contagem de símbolos distintos observados.
+ * Um `openssl rand -hex 16` (32 chars) usa a classe hex (16 símbolos possíveis); por acaso só ~11–14 aparecem
+ * de fato, então contar distintos SUBESTIMA a entropia e rejeitaria segredos hex válidos. A força de um segredo
+ * aleatório é length × log2(alfabeto-fonte), e o alfabeto-fonte é inferido pelas classes de caractere presentes.
+ */
+function sourceAlphabetSize(value: string): number {
+  let size = 0;
+  if (/[0-9]/.test(value)) size += 10;
+  if (/[a-f]/.test(value) && !/[g-z]/.test(value) && !/[A-Z]/.test(value) && !/[^0-9a-f._~+/=-]/.test(value)) {
+    // parece hexadecimal puro (dígitos + a–f): a classe hex tem 16 símbolos, não 10+6 genéricos.
+    return 16;
+  }
+  if (/[a-z]/.test(value)) size += 26;
+  if (/[A-Z]/.test(value)) size += 26;
+  // símbolos base64url/base64 e pontuação comum de segredos.
+  if (/[^0-9A-Za-z]/.test(value)) size += 16;
+  return Math.max(size, new Set(value).size);
+}
+
+/**
+ * G-032: bits de força ESTIMADOS ≈ comprimento × log2(alfabeto-fonte). Não é a entropia real do gerador
+ * (desconhecida aqui), mas uma estimativa que aceita segredos aleatórios de alfabeto pequeno (hex) e rejeita
+ * cadeias curtas/pobres. Sequências e dicionário são tratados por verificações próprias.
+ */
+export function estimatedSecretBits(value: string): number {
+  const alphabet = sourceAlphabetSize(value);
+  if (alphabet <= 1) return 0;
+  return [...value].length * Math.log2(alphabet);
 }
 
 /** Maior sequência de caracteres consecutivos (código ±1, ou vizinhos numa linha de teclado) em qualquer direção. */
@@ -92,22 +135,28 @@ function longestOrderedRun(value: string): number {
 }
 
 /**
- * G-019/G-030: motivo da recusa de um segredo fraco (ou null se aceitável). Nunca inclui o valor.
- * Recusa: valor de dev público, < 32 chars, < 16 caracteres distintos, entropia de Shannon < 3,5 bits/char,
- * padrão repetido ('abab…'), sequência ordenada (alfabeto/dígitos/teclado) > 5 e palavras fracas conhecidas.
+ * G-019/G-030/G-032: motivo da recusa de um segredo fraco (ou null se aceitável). Nunca inclui o valor.
+ * Recusa: valor de dev público, < 32 chars, padrão repetido ('abab…'), sequência ordenada
+ * (alfabeto/dígitos/teclado) > 5, palavras fracas conhecidas, entropia de Shannon < 3,5 bits/char e
+ * força estimada (comprimento × log2(alfabeto)) < 128 bits. A ordem põe os padrões ESTRUTURAIS antes da
+ * entropia para que 'x'*40 / 32×'a' / 'abcdefgh…' sejam recusados pelo motivo mais específico.
  */
 export function weakSecretReason(value: string, devDefaults: readonly string[] = [DEV_SESSION_SECRET, DEV_CLIENT_SECRET]): string | null {
   if (devDefaults.includes(value)) return 'dev_default';
   if (value.length < MIN_SESSION_SECRET_LENGTH) return 'too_short';
-  if (new Set(value).size < MIN_DISTINCT_CHARS) return 'trivial_entropy';
-  for (let n = 1; n <= 8; n++) {
+  // Padrão periódico (unidade de até 16 chars repetida): pega 'abab…', 'abcd1234'×, 'a1b2c3…'×, 'abc123ABC!'×.
+  // G-032: ampliado de 8 p/ 16 porque, ao trocar o piso de "16 distintos" por força estimada, cadeias
+  // visivelmente periódicas de período 9–16 passariam na entropia estimada; o período as recusa com precisão
+  // (zero falso-positivo em hex/base64 aleatórios — verificado). Independe do alfabeto, então não penaliza hex.
+  for (let n = 1; n <= 16; n++) {
     const unit = value.slice(0, n);
-    if (unit.repeat(Math.ceil(value.length / n)).slice(0, value.length) === value) return 'trivial_entropy';
+    if (unit.length < value.length && unit.repeat(Math.ceil(value.length / n)).slice(0, value.length) === value) return 'trivial_entropy';
   }
-  if (shannonBitsPerChar(value) < MIN_SHANNON_BITS_PER_CHAR) return 'low_entropy';
   if (longestOrderedRun(value) > MAX_SEQUENTIAL_RUN) return 'sequential_pattern';
   const lower = value.toLowerCase();
   if (WEAK_WORDS.some((w) => lower.includes(w))) return 'dictionary_word';
+  if (shannonBitsPerChar(value) < MIN_SHANNON_BITS_PER_CHAR) return 'low_entropy';
+  if (estimatedSecretBits(value) < MIN_ESTIMATED_SECRET_BITS) return 'low_entropy';
   return null;
 }
 

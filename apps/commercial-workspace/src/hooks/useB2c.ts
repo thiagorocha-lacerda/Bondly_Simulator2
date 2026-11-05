@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
-import { normalizeB2cInput, CURRENT_PREMISES, type B2cInput } from '@bondly/pricing-engine';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { B2cInput } from '@bondly/pricing-types';
+import { IS_DEV, loadDevEngine } from '../services/pricing/devEngine';
 
 const KEY = 'bondly-ws-b2c';
 const INCLUDE_KEY = 'bondly-ws-b2c-include';
@@ -113,7 +114,23 @@ export function useB2c(): UseB2c {
     }
   }, []);
 
-  const input = useMemo(() => normalizeB2cInput(raw, CURRENT_PREMISES), [raw]);
+  // G-001: normalização canônica via engine SOMENTE em DEV (fora do bundle de produção). Em PROD usa um
+  // merge local com os defaults (suficiente para o formulário; a projeção B2C real roda no servidor na Fase 4).
+  const localInput = useMemo(() => ({ ...B2C_DEFAULTS, ...raw }) as B2cInput, [raw]);
+  const [input, setInput] = useState<B2cInput>(localInput);
+  useEffect(() => {
+    if (!IS_DEV) {
+      setInput(localInput);
+      return;
+    }
+    let alive = true;
+    void loadDevEngine().then((eng) => {
+      if (alive) setInput(eng.normalizeB2cInput(raw, eng.CURRENT_PREMISES) as B2cInput);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [raw, localInput]);
 
   const reset = useCallback(() => {
     setRaw(B2C_DEFAULTS);

@@ -40,7 +40,7 @@ Com Docker: `docker run -p 10000:10000 -v bondly-data:/data --env-file .env.prod
 | `LEGACY_PROFILE_CODES_ACK_INSECURE` | não | **NÃO usar** | sem ele `LEGACY_PROFILE_CODES=true` é recusado em produção (G-008) |
 | `GOOGLE_CLIENT_ID` | não (público) | sim | |
 | `GOOGLE_CLIENT_SECRET` | **SIM** | sim | Secrets Manager / SSM SecureString |
-| `SESSION_SECRET` | **SIM** | sim | idem; gerar com 48 bytes aleatórios. **G-019:** em produção o boot é recusado (exit 1, log `boot_refused_config` sem o valor) se for o default de dev público, < 32 caracteres ou entropia trivial; `GOOGLE_CLIENT_SECRET` igual ao default de dev também é recusado |
+| `SESSION_SECRET` | **SIM** | sim | idem; gerar com `openssl rand -hex 32` (256 bits), `openssl rand -hex 16` (128 bits, mínimo) ou 48 bytes base64url. **G-019/G-032:** em produção o boot é recusado (exit 1, log `boot_refused_config` sem o valor) se for o default de dev público, < 32 caracteres, periódico (unidade de até 16 chars repetida), sequência/dicionário, OU com **força estimada < 128 bits** (`length × log2(alfabeto-fonte)`; hex de alfabeto pequeno é aceito). `GOOGLE_CLIENT_SECRET` igual ao default de dev também é recusado |
 | `BOOTSTRAP_ADMIN_EMAILS` | não | **sim no 1º deploy** | e-mails (domínio autorizado) promovidos a admin no boot **só se não houver admin**; sem segredo. Sem isso e sem legado, ninguém consegue atribuir perfis |
 | `LEGACY_PROFILE_CODES` | não | não (default `false`) | **DEPRECATED**; `true` reativa código de perfil compartilhado. Manter `false` em produção |
 | `PROFILE_CODE_HASH_BUSINESS/_TECH/_ADMIN` | **SIM** | só com `LEGACY_PROFILE_CODES=true` | DEPRECATED; papel sem hash fica inatingível |
@@ -98,6 +98,6 @@ Todo caminho servido atrás do gate de perfil (`/`, `/index.html`, `/assets/*`, 
 
 ## Rodada 3 — operação
 - **SQLite:** `busy_timeout` 5000 ms + retry limitado; lock persistente ⇒ HTTP 503 `{"error":"storage_busy"}` (cliente repete). Continue com **UMA instância** (volume/EFS único); multi-instância não é suportado (G-029).
-- **Segredo de sessão:** gerar com `openssl rand -base64 48 | tr '+/' '-_' | tr -d '='` (≥ 32 chars, ≥ 16 distintos, entropia ≥ 3,5 bits/char). Sequências/teclado/palavras fracas fazem o boot recusar (exit 1, só nome+motivo; G-030).
+- **Segredo de sessão (G-032):** comando recomendado `openssl rand -hex 32` (256 bits) — alternativas: `openssl rand -hex 16` (32 hex = 128 bits, mínimo) ou `openssl rand -base64 48 | tr '+/' '-_' | tr -d '='`. Regra de aceitação: ≥ 32 chars **e força estimada ≥ 128 bits** (`length × log2(alfabeto-fonte)`, de modo que hex de alfabeto pequeno passa). Default de dev, periódico (período ≤ 16), sequência (alfabeto/dígitos/teclado), dicionário e baixa variação de Shannon fazem o boot recusar (exit 1, só nome+motivo; G-030/G-032).
 - **Migração:** reabrir o banco existente aplica, de forma aditiva, os triggers append-only de `audit` e anti-REPLACE (G-028); nenhuma ação manual.
 - **Editar proposta emitida** retorna 409 `proposal_issued_immutable` (G-025).

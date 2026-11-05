@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { calculate, type PricingInput, type PricingResult } from '@bondly/pricing-engine';
+import type { PricingInput, PricingResult } from '@bondly/pricing-types';
 import { DEFAULT_INPUT } from '../services/defaults';
+import { EMPTY_RESULT } from '../services/pricing/emptyResult';
+import { IS_DEV, loadDevEngine } from '../services/pricing/devEngine';
 import type { DeepPartial } from '../services/patch';
 
 const STORAGE_KEY = 'bondly-ws-input';
@@ -36,11 +38,14 @@ export interface UsePricing {
 }
 
 /**
- * Estado central do workspace. Persistência local (Cenário A §27.5): dados ficam só neste navegador,
- * NÃO sincronizados entre usuários/dispositivos. Todo cálculo passa pelo Pricing Engine (§20).
+ * Estado central LOCAL — SOMENTE DEV (G-001). Em produção o cálculo é server-side (useCentralPricing/useQuote);
+ * este hook só é exercitado quando `import.meta.env.DEV` é verdadeiro. O engine é carregado por import dinâmico
+ * (devEngine) atrás do guard DEV, então o motor/tabelas NÃO entram no bundle de produção. Em produção o `result`
+ * aqui é o EMPTY_RESULT (nunca exibido: a origem efetiva é o servidor), mantido só para satisfazer a mesma forma.
  */
 export function usePricing(): UsePricing {
   const [input, setInput] = useState<PricingInput>(loadStored);
+  const [result, setResult] = useState<PricingResult>(EMPTY_RESULT);
 
   useEffect(() => {
     try {
@@ -48,6 +53,18 @@ export function usePricing(): UsePricing {
     } catch {
       /* quota/privado: ignora, dados ficam em memória */
     }
+  }, [input]);
+
+  // DEV: recalcula localmente via engine carregado sob demanda. PROD: ramo eliminado (DCE), result = EMPTY_RESULT.
+  useEffect(() => {
+    if (!IS_DEV) return;
+    let alive = true;
+    void loadDevEngine().then((eng) => {
+      if (alive) setResult(eng.calculate(input));
+    });
+    return () => {
+      alive = false;
+    };
   }, [input]);
 
   const update = useCallback((patch: DeepPartial<PricingInput>) => {
@@ -63,7 +80,5 @@ export function usePricing(): UsePricing {
     }
   }, []);
 
-  const result = useMemo(() => calculate(input), [input]);
-
-  return { input, result, update, reset };
+  return useMemo(() => ({ input, result, update, reset }), [input, result, update, reset]);
 }

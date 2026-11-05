@@ -278,6 +278,22 @@ export async function createSqliteRepository(
       BEGIN SELECT RAISE(ABORT, 'assignment_audit é append-only (replace)'); END;
     CREATE TRIGGER IF NOT EXISTS approval_requests_no_replace BEFORE INSERT ON approval_requests WHEN EXISTS (SELECT 1 FROM approval_requests WHERE id = NEW.id)
       BEGIN SELECT RAISE(ABORT, 'approval_requests é append-only (replace)'); END;
+    -- G-031 (migração aditiva, idempotente): approval_decisions é imutável por decisão (uma por proposta,kind).
+    -- O INSERT legítimo usa ON CONFLICT(proposal_id,kind) DO NOTHING (não dispara DELETE ⇒ passa). Um
+    -- INSERT OR REPLACE, porém, com recursive_triggers=ON dispara o BEFORE DELETE implícito e ABORTA — logo
+    -- NÃO há trigger BEFORE INSERT WHEN EXISTS aqui (ela quebraria o DO NOTHING idempotente). UPDATE/DELETE abortam.
+    CREATE TRIGGER IF NOT EXISTS approval_decisions_no_update BEFORE UPDATE ON approval_decisions
+      BEGIN SELECT RAISE(ABORT, 'approval_decisions é imutável'); END;
+    CREATE TRIGGER IF NOT EXISTS approval_decisions_no_delete BEFORE DELETE ON approval_decisions
+      BEGIN SELECT RAISE(ABORT, 'approval_decisions é imutável'); END;
+    -- G-031 (migração aditiva, idempotente): sla_events é append-only (INSERT puro com id PK). no_update +
+    -- no_delete + no_replace (BEFORE INSERT WHEN EXISTS no id), idêntico ao padrão provado de audit/owner_audit.
+    CREATE TRIGGER IF NOT EXISTS sla_events_no_update BEFORE UPDATE ON sla_events
+      BEGIN SELECT RAISE(ABORT, 'sla_events é append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS sla_events_no_delete BEFORE DELETE ON sla_events
+      BEGIN SELECT RAISE(ABORT, 'sla_events é append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS sla_events_no_replace BEFORE INSERT ON sla_events WHEN EXISTS (SELECT 1 FROM sla_events WHERE id = NEW.id)
+      BEGIN SELECT RAISE(ABORT, 'sla_events é append-only (replace)'); END;
   `);
 
   // G-002 (migração aditiva): bancos MUITO antigos sem owner_email ganham a coluna vazia (⇒ só admin enxerga).

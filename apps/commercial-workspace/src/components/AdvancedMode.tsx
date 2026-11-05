@@ -1,5 +1,5 @@
-import type { PricingInput, CommunicationStrategy, CommercialOption, ModuleId } from '@bondly/pricing-engine';
-import { MODULE_CATALOG } from '@bondly/pricing-engine';
+import type { PricingInput, CommunicationStrategy, CommercialOption, ModuleId } from '@bondly/pricing-types';
+import { MODULE_CATALOG } from '@bondly/pricing-catalog';
 import { NumberField, PercentField, Panel, Toggle, SelectField, TextField } from './Fields';
 import { useAudience } from '../app/audience';
 

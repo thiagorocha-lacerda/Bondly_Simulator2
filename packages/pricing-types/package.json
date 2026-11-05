@@ -1,0 +1,24 @@
+{
+  "name": "@bondly/pricing-types",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tipos públicos do Pricing Engine — SOMENTE declarações de tipo (interfaces/type), ZERO runtime, ZERO tabelas de custo/premissa. Usado pelo Commercial Workspace para tipar o QuoteView sem arrastar o motor/tabelas ao bundle do navegador (G-001).",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

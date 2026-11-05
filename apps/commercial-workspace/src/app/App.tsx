@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ModuleId } from '@bondly/pricing-engine';
-import { MODULE_CATALOG, validateDependencies } from '@bondly/pricing-engine';
-import { usePricing } from '../hooks/usePricing';
+import type { ModuleId } from '@bondly/pricing-types';
+import { MODULE_CATALOG, validateDependencies } from '@bondly/pricing-catalog';
+import { useCentralPricing } from '../services/pricing/useCentralPricing';
 import { useTheme } from '../hooks/useTheme';
 import { useB2c } from '../hooks/useB2c';
 import { useSession } from '../hooks/useSession';
@@ -38,7 +38,9 @@ function loadModules(): ModuleId[] {
 }
 
 export function App() {
-  const { input, result, update, reset } = usePricing();
+  // G-001-A Fase 3.2: origem do cálculo comutável por flag de runtime (?pricingSource=server).
+  // Default 'local' ⇒ engine no navegador, comportamento idêntico ao atual. 'server' ⇒ POST /api/pricing/quote.
+  const { input, result, update, reset } = useCentralPricing();
   const [theme, setTheme] = useTheme();
   const b2c = useB2c();
   const { audience, internal, setAudience } = useAudience();
