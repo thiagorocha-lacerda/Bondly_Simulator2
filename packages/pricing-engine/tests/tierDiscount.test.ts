@@ -8,6 +8,9 @@ import {
   reopenProposal,
   reviseProposal,
   CURRENT_PREMISES,
+  PREMISES_V15,
+  PREMISES_V16,
+  premisesForVersion,
   complexity as computeComplexity,
   type PricingInput,
   type TierDiscountLimits,
@@ -37,10 +40,85 @@ function baseInput(overrides?: Partial<PricingInput['negotiation']>): PricingInp
 }
 
 describe('Desconto por tier — limites da tabela (§3.1)', () => {
-  it('a faixa padrão é 3%–7%, marcada PENDENTE de aprovação (§3.2.3)', () => {
+  it('a faixa padrão é 3%–7%, VALIDADA na v16 (ratificação do sponsor 2026-11-05)', () => {
     expect(LIMITS.min).toBeCloseTo(0.03, 9);
     expect(LIMITS.max).toBeCloseTo(0.07, 9);
-    expect(P.tierDiscountLimits.status).toBe('pendente');
+    expect(P.version).toBe('v16');
+    expect(P.tierDiscountLimits.status).toBe('validada');
+  });
+});
+
+describe('Governança de versões — v15 e v16 coexistem (prompt §27.6)', () => {
+  it('v15 permanece PENDENTE e congelada; v16 é VALIDADA; só o status muda', () => {
+    expect(PREMISES_V15.version).toBe('v15');
+    expect(PREMISES_V15.tierDiscountLimits.status).toBe('pendente');
+    expect(PREMISES_V16.version).toBe('v16');
+    expect(PREMISES_V16.tierDiscountLimits.status).toBe('validada');
+    // valores da premissa inalterados entre as versões
+    expect(PREMISES_V16.tierDiscountLimits.value).toEqual(PREMISES_V15.tierDiscountLimits.value);
+  });
+  it('hashes distintos entre v15 e v16 (identidade imutável de snapshot)', () => {
+    expect(PREMISES_V15.hash).not.toBe(PREMISES_V16.hash);
+  });
+  it('demais campos idênticos entre v15/v16, exceto o tier-discount e a redução do Setup fixo', () => {
+    const strip = (t: typeof PREMISES_V15) => {
+      const { version, hash, label, effectiveDate, tierDiscountLimits, setupFixedReductionDefault, ...rest } = t;
+      void version; void hash; void label; void effectiveDate; void tierDiscountLimits; void setupFixedReductionDefault;
+      return rest;
+    };
+    expect(strip(PREMISES_V16)).toEqual(strip(PREMISES_V15));
+    // os valores-base dos tiers (incl. setup) permanecem RASTREÁVEIS e inalterados entre versões
+    expect(PREMISES_V16.tiers.value).toEqual(PREMISES_V15.tiers.value);
+    // a redução do Setup fixo é a segunda mudança de governança da v16
+    expect(PREMISES_V15.setupFixedReductionDefault.value).toBe(0);
+    expect(PREMISES_V16.setupFixedReductionDefault.value).toBeCloseTo(0.2, 9);
+    expect(PREMISES_V16.setupFixedReductionDefault.status).toBe('validada');
+  });
+  it('o registro resolve cada versão pela sua chave', () => {
+    expect(premisesForVersion('v15')).toBe(PREMISES_V15);
+    expect(premisesForVersion('v16')).toBe(PREMISES_V16);
+    expect(premisesForVersion('v99')).toBeUndefined();
+  });
+  it('CURRENT_PREMISES é a v16', () => {
+    expect(CURRENT_PREMISES).toBe(PREMISES_V16);
+  });
+});
+
+describe('Reabertura reproduz a versão congelada da proposta (snapshot imutável)', () => {
+  const input = baseInput({ tierDiscount: 0.05 });
+
+  it('proposta criada sob v15 reabre com cálculo e status PENDENTE históricos', () => {
+    const snap = createProposalSnapshot({ id: 'BONDLY-2027-000010', input, premises: PREMISES_V15 });
+    expect(snap.premisesVersion).toBe('v15');
+    expect(snap.premises.tierDiscountLimits.status).toBe('pendente');
+    const re = reopenProposal(snap);
+    expect(re.reproducible).toBe(true);
+    expect(re.premisesIntact).toBe(true);
+    expect(re.versionRegistered).toBe(true);
+  });
+
+  it('nova proposta usa v16 (validada) por padrão e reabre reproduzindo v16', () => {
+    const snap = createProposalSnapshot({ id: 'BONDLY-2027-000011', input });
+    expect(snap.premisesVersion).toBe('v16');
+    expect(snap.premises.tierDiscountLimits.status).toBe('validada');
+    expect(snap.premisesHash).toBe(PREMISES_V16.hash);
+    const re = reopenProposal(snap);
+    expect(re.reproducible).toBe(true);
+    expect(re.premisesIntact).toBe(true);
+    expect(re.versionRegistered).toBe(true);
+  });
+
+  it('Core/PF idênticos entre v15 e v16 (governança do tier); Setup fixo −20% na v16', () => {
+    const r15 = calculate(input, PREMISES_V15);
+    const r16 = calculate(input, PREMISES_V16);
+    // o desconto por tier incide só no PF/Core — idêntico entre as versões
+    expect(r16.platformFee).toBeCloseTo(r15.platformFee, 9);
+    expect(r16.core).toBeCloseTo(r15.core, 9);
+    // o Setup fixo diverge: v16 aplica a redução default de 20% (DECISION sponsor 2026-11-05)
+    expect(r16.setup.fixedReductionPct).toBeCloseTo(0.2, 9);
+    expect(r15.setup.fixedReductionPct).toBe(0);
+    expect(r16.setup.fixed).toBeCloseTo(r15.setup.fixed * 0.8, 6);
+    expect(r16.tcvClient).toBeLessThan(r15.tcvClient); // Setup menor ⇒ TCV ao cliente menor
   });
 });
 

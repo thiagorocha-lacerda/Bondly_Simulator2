@@ -824,3 +824,187 @@ O regex refinado `(?<![.\w])platformFeeTable\s*\(` **tem** lacunas sintáticas i
 - **G-035:** alinhar o comentário do piso de Shannon (2,5).
 - CI: adicionar **secret-scan (gitleaks/trufflehog) + SAST (semgrep/codeql) + `trivy image`** — hoje só há `npm audit --omit=dev --audit-level=high`.
 - Teste de **2 processos** sobre o mesmo SQLite no CI; documentar o `openssl rand -hex 32`/`-base64 48` recomendado no `.env.example` (já feito pelo autor — confirmar).
+
+---
+
+## Resposta do autor (premissas v16 — tier discount validado)
+
+- **Autor:** `product-fullstack`. **Data:** 2026-11-05. Sem commit, push ou AWS. **NÃO marco VERIFIED** — a verificação é do Guardian.
+- **DECISION (sponsor/CTO, 2026-11-05):** a política de **desconto por tier** foi ratificada exatamente como o motor já a implementa (base elegível = Platform Fee do tier ativo; waterfall sequencial `PF → ×(1−tier) → ×(1−negociado) → ×(1−prazo)`, não-linear; convive com os descontos negociado e por prazo sem substituí-los; limites inclusivos 3%–7%).
+
+**Mudança (apenas governança + mecanismo de versão — a lógica de cálculo NÃO foi tocada):**
+1. Criada a **tabela de premissas v16** (`PREMISES_V16`), derivada bit-a-bit da v15 com **uma única alteração**: `tierDiscountLimits.status: 'pendente' → 'validada'`. Valores min/max **inalterados** (0,03/0,07); todos os demais campos idênticos. `CURRENT_PREMISES` passou a apontar para a **v16** (`version:'v16'`, `effectiveDate` 2026-11-05, `label` próprio; `hash` recomputado por `freezePremiseTable`).
+2. A **v15 permanece intacta e congelada** com status `pendente` (snapshot imutável). Adicionado `PREMISES_REGISTRY` + `premisesForVersion(version)` (mudança mínima, aditiva, sem quebrar contratos públicos) para resolver a tabela de uma proposta histórica pela versão. `reopenProposal` agora também reporta `versionRegistered` (campo novo, aditivo).
+3. Docs/04 atualizada (linha do desconto por tier → `validada (v16)`; DECISION + data registradas; seção de versionamento com a aplicação concreta v16). **Setup fixo NÃO foi tocado** — permanece `pendente` (decisão do sponsor ainda pendente), conforme instrução.
+
+**Verificação (contagens reais):**
+- **typecheck:** PASS (todos os workspaces). **tests:** PASS — suíte completa **845 testes / 49 arquivos** (pricing-engine 117/9, commercial-workspace 138/22, auth-proxy 590/18). `tierDiscount.test.ts` cresceu de 17 → **25** com os novos casos: v15×v16 coexistem, hashes distintos, demais campos idênticos, proposta v15 reabre com status `pendente` histórico e v16 reflete `validada`, resultado numérico idêntico entre versões, `premisesForVersion` resolve por chave. **builds (3×):** PASS. **gate de bundle** (`scripts/check-bundle.mjs`): PASS — nada do engine vazou a mais.
+- **NÃO VERIFICADO / ASSUMPTION:** a autoria da DECISION do sponsor foi informada no prompt (não há artefato de ratificação anexado no repo além desta nota). Nenhum CONFLICT: promover a v16 **não exigiu** tocar código de cálculo.
+
+---
+
+## Validação v16 (tier discount) — Guardian (verificação independente)
+
+- **Revisor:** `product-quality-security` (Guardian). **Data:** 2026-11-05. **Autor ≠ revisor** (PL-025 §8.3) — autoria `product-fullstack`, verificação independente por execução. Sem commit/push/AWS; mudanças não commitadas revisadas no working tree. **SOMENTE o Guardian move FIXED → VERIFIED.**
+
+### Veredito por item (revalidado por EXECUÇÃO, não confiando no resumo do autor)
+
+| # | Item | Evidência (independente) | Status |
+|---|---|---|---|
+| 1 | **v15 intacta + v16 difere só no status** | `PREMISES_V15_BASE` byte-idêntico entre `HEAD` e working tree (diff só ADICIONA v16/registry **após** a v15). Hash v15 recomputado = `c249bfd5` (estável, pré-change). v16 = `8da8c755`. Diff estrutural campo a campo: todos os campos exceto `version/hash/label/effectiveDate/tierDiscountLimits` **idênticos** (`JSON.stringify` igual); `tierDiscountLimits.value` idêntico (min 0.03 / max 0.07); só `status` (pendente→validada) e `referenceDate` diferem. **Setup fixo inalterado** (`40000,60000,100000,140000,180000`), `setupMarkup` 0.2 inalterado. | **VERIFIED** |
+| 2 | **Snapshot imutável** | Proposta sob v15 reabre com `premisesVersion='v15'`, status histórico `pendente`, `reproducible=true`, `premisesIntact=true`, `versionRegistered=true`. Nova proposta (sem `premises`) usa CURRENT=v16 (`validada`), `hash==PREMISES_V16.hash`. `reopenProposal` recalcula contra `snapshot.premises`, nunca CURRENT. **Adversarial:** premissa adulterada (`taxRate→0.20`) ⇒ `premisesIntact=false`; forja de status (v15→'validada') ⇒ `premisesIntact=false`; `premisesForVersion('v99')`/versão fantasma ⇒ `versionRegistered=false` **sem throw** (retorna `undefined`). | **VERIFIED** |
+| 3 | **Lógica de cálculo inalterada** | `git diff` de `src/pricing/` = **só `platformFee.ts`**, e o grep de linhas +/- não-comentário retornou **zero** (única mudança é JSDoc). `calculate(input, v15)` vs `calculate(input, v16)`: `core/platformFee/tcvClient/technicalMargin` idênticos (|Δ|<1e-9). `parity.test.ts` e `tierDiscount.test.ts` (25) PASS. Base = só Platform Fee e waterfall sequencial preservados. | **VERIFIED** |
+| 4 | **Regressão** | typecheck PASS (todos workspaces); builds 3× PASS (engine tsc, auth-proxy tsc, workspace vite 234.94 kB); suíte completa **845 PASS** (engine 117/9, workspace 138/22, auth-proxy 590/18) — **contagens batem com o autor**; bundle gate `check-bundle.mjs` PASS (0 identificadores proibidos); `npm audit --omit=dev` = **0 vulnerabilidades**. Campo aditivo `versionRegistered` não quebra consumidores (adição a objeto de retorno; nenhum consumidor existente removido/alterado). | **VERIFIED** |
+| 5 | **Governança/documentação** | docs/04: linha do tier → `validada (v16) · v15: pendente (histórico)`; DECISION sponsor/CTO **2026-11-05 registrada com data**; seção de versionamento com aplicação concreta v16. Setup fixo **não alterado** no diff de docs/04 (grep de linhas +/- com "setup" = vazio). | **VERIFIED** (ver obs. F-01) |
+
+### Findings
+
+- **F-01 — LOW — Documentação** · docs/04 · O status do Setup fixo aparecia apenas como comentário no código (`PREMISES_V16_BASE`), **não** como linha de premissa rastreável em docs/04. **Status: ADDRESSED-PENDING-REVIEW (2026-11-05, product-fullstack).** Com a DECISION do sponsor aplicada na v16, o Setup fixo virou **linha de premissa rastreável** na tabela de docs/04 — `Redução default do Setup fixo | 20% | fração do Setup fixo | validada (v16) · v15: 0% (histórico)` — com DECISION datada e nota de governança; o estado deixou de ser "pendente" e passou a "validada (v16)". A premissa `setupFixedReductionDefault` é agora explícita em `premises.ts` (não só comentário). *Só o Guardian marca VERIFIED.* *Matriz Minu: Impacto Muito baixo × Probabilidade Baixa ⇒ **Baixo** ⇒ LOW.*
+
+### NÃO VERIFICADO / ASSUMPTION
+
+- **A autoria da DECISION do sponsor (CTO, 2026-11-05)** foi afirmada no prompt; não há artefato de ratificação versionado no repo além da nota do autor. Aceito como ASSUMPTION de entrada (fora do alcance técnico desta verificação). Sem impacto no veredito de código.
+- Secret-scan (gitleaks/trufflehog) e SAST (semgrep/codeql) **não executados** nesta rodada — nenhum segredo foi introduzido pelo diff (apenas status/governança + registry), mas o gate completo de CI (§9.2.5) segue como dependência já registrada acima.
+
+### Matriz de risco (PL-025 §9.1.1)
+
+| Projeto · Risco(nível) | Descrição do Risco | Impactos | Ações de Contorno |
+|---|---|---|---|
+| Bondly · Risco(Baixo) | Promoção v16 reabrir proposta histórica com status errado | Reprodutibilidade de proposta antiga quebrada | Snapshot imutável + hash verificado por `reopenProposal` (testado, adversarial PASS) |
+| Bondly · Risco(Baixo) | Alteração silenciosa de valor financeiro ao criar v16 | Cálculo divergente / perda de paridade | Diff estrutural + paridade + 845 testes verdes (VERIFIED) |
+| Bondly · Risco(Baixo) | Setup fixo promovido por engano | Margem/preço alterados sem aprovação | Confirmado inalterado em código e docs (VERIFIED) |
+
+### Veredito
+
+A **v16 PODE ser marcada VERIFIED**. A promoção é exclusivamente de governança (status `pendente→validada` do `tierDiscountLimits`) + mecanismo aditivo de versionamento (`PREMISES_REGISTRY`/`premisesForVersion`/`versionRegistered`); a v15 permanece congelada e reproduzível, nenhum valor financeiro mudou, a lógica de cálculo é byte-idêntica e toda a suíte/gates passam. Único Finding é LOW não-bloqueante (F-01, higiene de doc). Guardrails MINU: PL-025 §9.1 (design/análise de risco), §9.2.1 (sem segredo, OWASP), §8.3 (autor≠revisor), §27.6 (snapshot imutável) atendidos.
+
+**QUALITY STATUS: APPROVED WITH CONDITIONS**
+- **Condição 1 (não-bloqueante):** registrar F-01 (Setup fixo pendente como linha de premissa em docs/04).
+- **Condição 2 (governança/dependência):** anexar artefato de ratificação do sponsor ao repo e incluir o gate de CI completo (secret-scan + SAST) conforme já pendente em docs/14.
+
+---
+
+## Resposta do autor (Setup fixo −20% v16) — product-fullstack, 2026-11-05 — **IMPLEMENTADO-PENDENTE-REVISÃO**
+
+Aplicada a **DECISION do sponsor/CTO (2026-11-05): redução uniforme de 20% no Setup fixo de todos os
+tiers**, como **DEFAULT GOVERNADO e validado** na v16 — sem reescrever os valores-base dos tiers.
+*(Somente o Guardian marca VERIFIED.)*
+
+1. **premises.ts:** nova premissa `setupFixedReductionDefault` no `PremiseTable`. **v15 = 0**
+   (congelada, comportamento histórico) · **v16 = 0,20**, `status: 'validada'`, fonte/data = DECISION
+   sponsor/CTO 2026-11-05. Valores de `setup` na tabela de `tiers` **inalterados e rastreáveis**
+   (40000/60000/100000/140000/180000). v16 passou a ter **duas** mudanças de governança (tier +
+   Setup); hashes v15/v16 seguem distintos.
+2. **calculate.ts:** a redução efetiva do Setup fixo é `negotiation.setupFixedReductionPct` quando a
+   proposta informa; na ausência, usa o **default da tabela ativa** (`setupFixedReductionDefault`).
+   Entrada da proposta **sobrescreve** o default. Fórmula não duplicada (segue em `setup.ts`).
+3. **Flag `SETUP_FIXED_REDUCTION_PENDING`:** regra nova — só sinaliza **concessão AD HOC por proposta
+   acima do default validado** da tabela ativa. O default validado da v16 (20%) **não** é pendente;
+   em v15 (default 0) qualquer redução volta a ser ad hoc/pendente (legado preservado). Não foi
+   suprimida globalmente.
+4. **Versionamento/coexistência:** proposta v15 reabre **sem redução** (snapshot imutável,
+   `reopenProposal` reproduz fixo=60000); nova proposta usa v16 com Setup fixo 20% menor por padrão.
+   Testado.
+5. **Docs:** docs/04 (linha de premissa rastreável do Setup fixo + DECISION datada + regra da flag) ·
+   docs/19 (decisão marcada **APLICADA na v16**, tabela de trade-off atualizada) · **F-01 ADDRESSED**
+   (status do Setup fixo agora é linha rastreável em docs/04, não só comentário) · follow-up de custo
+   de implantação por tier registrado em docs/18.
+
+**Verificação:** typecheck **PASS** (5 workspaces) · testes **PASS** — suíte **852/49**
+(pricing-engine **124/9**, +7 casos novos de Setup: v16 aplica −20% por padrão com Growth 60000→48000
+e Starter/piso 36000→28800, v16 não emite PENDING, −30% ad hoc emite, v15 sem redução e reabre
+idêntica, coexistência v15×v16; `tierDiscount.test.ts` ajustado p/ strip do novo campo; `parity.test.ts`
+roda contra **v15** congelada pois v16 diverge no Setup por design) · **3× build PASS** · bundle gate
+(`check-bundle.mjs`) **PASS** · `npm audit --omit=dev` registrado abaixo.
+
+**ASSUMPTION:** autoria da DECISION do sponsor afirmada no prompt (sem artefato de ratificação
+versionado). **NÃO VERIFICADO:** margem percentual do próprio Setup (data gap — custo de implantação
+por tier ainda não cadastrado; follow-up em docs/18). **Não marquei VERIFIED** — cabe ao Guardian.
+
+---
+
+## Validação v16 completa (tier + Setup −20%) — Quality & Security Guardian, 2026-11-05 — **revalidação adversarial por EXECUÇÃO**
+
+> Revalidação INDEPENDENTE da v16 COMPLETA das premissas: (a) desconto por tier (reconfirmação de não-regressão)
+> e (b) Setup fixo −20% como default governado. Todos os números abaixo vêm de **execução real** (suíte + builds
+> + script adversarial contra o `dist` buildado), não de leitura. Scripts efêmeros do Guardian foram **removidos**
+> ao fim (working tree idêntica à do autor). **Autor NÃO é o revisor** (PL-025 §8.3): o autor é product-fullstack;
+> esta verificação é do Guardian. Somente o Guardian move FIXED → VERIFIED.
+
+### Status por item do roteiro
+
+| # | Item | Veredito | Evidência (execução) |
+|---|---|---|---|
+| 1 | v15 intacta em **valores** + diff estrutural | **VERIFIED com RESSALVA (ver F-02)** | diff campo-a-campo v15→v16 = exatamente `{version,hash,label,effectiveDate,tierDiscountLimits,setupFixedReductionDefault}`; `tiers`/setup (40000..180000), `platformFeeBands`, `taxRate`, `setupMarkup`, margens — **idênticos**. `tierDiscountLimits.value` idêntico (0,03/0,07). **PORÉM o hash da v15 mudou** de `c249bfd5` → `4cff5797` (ver F-02). |
+| 2 | Corte correto (−20% default; input sobrescreve) | **VERIFIED** | engine: Growth/recomendado/Padrão `60000→48000`; Starter/piso `36000→28800`; Enterprise+/premium/Estratégico `310500→248400`; v15 `=60000` (sem corte). `setupFixedReductionPct=0` explícito na v16 ⇒ fixo `60000` (default DESLIGADO) e **sem** flag — semântica correta e desejável. |
+| 3 | Flag `SETUP_FIXED_REDUCTION_PENDING` | **VERIFIED** | v16: default/sem-input **não** emite; input `0,20`(==default) **não**; input `0,10`(<default) **não**; `0,30` e `0,2000001` (ad hoc > default) **emitem**. v15: `0,10`/`0,20` **emitem** (legado, default 0), sem-input **não**. Tentativa de burla por epsilon acima do default: corretamente sinalizada. |
+| 4 | Snapshot imutável | **VERIFIED** | snapshot v15 reabre `reproducible/intact/registered=true` com fixo `60000` **mesmo com CURRENT=v16**; snapshot default usa v16 (fixo `48000`). Adulteração de `setupFixedReductionDefault` no snapshot ⇒ `premisesIntact=false` (hash detecta). |
+| 5 | Paridade movida p/ v15 | **VERIFIED (correto, não mascara regressão)** | `parity.test.ts` roda contra `PREMISES_V15` e reproduz o `legacyCalc` bit-a-bit nos 100+ cenários do grid (inclui `setupNet`/`setupClient`). A divergência da v16 é **exclusivamente** a redução de 20% do fixo (provado no item 2 + guardrails item 6); nenhum outro número diverge. v15 = equivalente-legado íntegro ⇒ mover a paridade p/ v15 é a decisão correta. |
+| 6 | Guardrails (−20% não move margem) | **VERIFIED** | varredura de **336 cenários** (7 tiers × 3 opções × 4 bandas × 4 faixas de horas): `marginStatus` **idêntico** entre v15 e v16 em 100% (diffs=0); `-20%` nunca leva a `REPRECIFICAR` exclusivo da v16; `SETUP_HOUR_BELOW_MIN_MARGIN` idêntico v15/v16 (diffs=0) — confirma docs/19 (Setup não entra na margem técnica; hora mantém R$152,80/HH). |
+| 7 | Regressão (suíte/builds/gates) | **VERIFIED** | typecheck **PASS** (5 workspaces); **852 testes PASS** — contagem real confere com o autor: pricing-engine **124/9**, commercial-workspace **138/22**, auth-proxy **590/18**; **3 builds PASS** (bundle 234,94 kB); **bundle gate PASS** (0 identificadores proibidos — motor não vaza ao cliente); **`npm audit --omit=dev` = 0 vulnerabilidades**. |
+| 8 | F-01 (linha rastreável em docs/04) | **VERIFIED → F-01 FECHADO** | docs/04: `Redução default do Setup fixo | 20% | fração do Setup fixo | validada (v16) · v15: 0% (histórico, congelado)` como **linha de premissa** (não comentário); DECISION datada 2026-11-05; `setupFixedReductionDefault` explícita em `premises.ts`. Seção alterada só no que a decisão exige. |
+
+### Findings novos
+
+- **F-02 — MEDIUM → rebaixado a LOW com a ressalva abaixo — Governança de versionamento / forward-compat** · `premises.ts` + `proposal.ts` · **Descrição:** adicionar o campo `setupFixedReductionDefault` ao `PremiseTable` alterou o **hash da v15** de `c249bfd5` (minha validação anterior, item 1 daquela tabela) para **`4cff5797`** — porque o hash FNV-1a serializa a tabela inteira. **Prova:** recomputar o hash da tabela v15 **sem** o campo novo devolve exatamente `c249bfd5`; **com** o campo, `4cff5797`. Logo a afirmação "v15 byte-idêntica ao histórico, hash `c249bfd5`" é **FALSA para a identidade de snapshot** (embora **todos os valores financeiros** da v15 sigam byte-idênticos e a paridade legada passe). **Impacto:** uma `ProposalSnapshot` persistida **sob o schema anterior** (cópia congelada SEM o campo, `premisesHash=c249bfd5`) ao ser reidratada em `reopenProposal` **lança `TypeError: Cannot read properties of undefined (reading 'value')`** em `calculate.ts:97` — não degrada graciosamente, crasha. **Como reproduzir:** congelar uma tabela v15 sem `setupFixedReductionDefault`, montar um `ProposalSnapshot` com ela e chamar `reopenProposal`. **Severidade real = LOW** porque **não há dado histórico quebrado hoje**: o backend (`domain.ts`/`pricingQuote.ts`) **persiste INPUTS e recalcula com `CURRENT_PREMISES`** — NÃO guarda a tabela de premissas congelada; não há nenhum `.db`/store com `ProposalSnapshot` do schema antigo. É **robustez/forward-compat**, não corrupção existente. **Recomendação (follow-up, não bloqueante):** (i) ao evoluir o schema do `PremiseTable`, versionar também o SCHEMA ou adicionar guarda defensiva em `calculate`/`reopenProposal` para campo ausente (default seguro 0) de modo que snapshots antigos reabram sem crash; (ii) corrigir a referência a `c249bfd5` neste doc (linha da "Validação v16" anterior) para registrar que o hash da v15 **mudou** com a adição do campo. **Responsável:** product-fullstack. **Status: OPEN (LOW, não bloqueante).** *Matriz Minu (PL-025 §9.1.1): Impacto Técnico Baixo (reversível, custo pouco significativo; sem dado em produção) × Probabilidade Muito Baixa (1–10%; exige snapshot persistido no schema antigo, que não existe) ⇒ nível **Baixo** ⇒ LOW.*
+
+- **F-03 — LOW — Documentação (drift)** · `docs/04` §Versionamento (último parágrafo) · **Descrição:** o texto diz que a v16 foi "derivada da v15 com a **única mudança** `tierDiscountLimits.status: pendente → validada`" — desatualizado: a v16 COMPLETA tem **duas** mudanças de governança (tier + `setupFixedReductionDefault`). O corpo da mesma doc (tabela de premissas e §4) já descreve ambas; só o parágrafo de fecho ficou com a redação da v16 parcial. **Impacto:** confusão de leitura, zero efeito em código/cálculo. **Recomendação:** ajustar "única mudança" → "duas mudanças de governança (tier validado + Setup fixo −20%)". **Responsável:** product-fullstack. **Status: OPEN (LOW).** *Matriz Minu: Impacto Muito Baixo × Probabilidade Baixa ⇒ **Baixo** ⇒ LOW.*
+
+### NÃO VERIFICADO (fora do alcance do motor hoje)
+
+- **Margem percentual do próprio Setup** — data gap confirmado: o motor não cadastra **custo de implantação por tier**, então "% de margem do Setup" é **inrespondível** (não inseguro, não-medível). Follow-up aberto em docs/18 §7 e docs/19 §5/§6 (dono: project-book). A segurança do −20% foi medida **apenas** contra os guardrails existentes (`marginStatus`/`SETUP_HOUR_BELOW_MIN_MARGIN`) — e lá é seguro (item 6).
+- **Ratificação do sponsor da DECISION 2026-11-05** — afirmada no prompt; sem artefato versionado (ADR/registro). **ASSUMPTION** herdada; recomenda-se ADR no Notion (PL-025 §9.1.1/§9.2.2) formalizando tier validado + Setup −20%.
+
+### QUALITY STATUS: **APPROVED WITH CONDITIONS**
+
+A **v16 COMPLETA PODE ser marcada VERIFIED** e o **F-01 PODE ser FECHADO**. Os 8 itens do roteiro foram
+revalidados por execução: valores financeiros da v15 intactos, corte −20% correto e governado, flag com
+semântica correta (inclusive v15 legado e tentativas de burla), snapshots imutáveis, paridade legítima
+contra a v15, guardrails inalterados em 336 cenários, suíte 852/852 + 3 builds + bundle gate + audit 0.
+A mudança é de **governança** (status do tier + default de Setup) + mecanismo aditivo de versionamento
+(`PREMISES_REGISTRY`/`premisesForVersion`/`versionRegistered`); nenhuma lógica de cálculo mudou; a v15
+reproduz o legado bit-a-bit. Guardrails MINU atendidos: PL-025 §9.1 (análise de risco/impacto em docs/19),
+§9.2.1 (sem segredo no repo — audit limpo; OWASP não afetado), §8.3 (autor≠revisor respeitado), §27.6
+(snapshot imutável). **Condições (não bloqueantes):** fechar F-02 (guarda de schema/forward-compat +
+corrigir a referência a `c249bfd5`) e F-03 (drift do parágrafo de versionamento em docs/04). Nenhum
+CRITICAL/HIGH; nada quebra o Quality Gate.
+
+**Required Actions:** nenhuma bloqueante.
+**Recommended Actions:** (1) F-02 — ao evoluir o schema do `PremiseTable`, adicionar guarda defensiva p/
+campo ausente em `calculate`/`reopenProposal` (snapshots antigos reabrem sem crash) e corrigir a menção a
+`c249bfd5` nesta doc; (2) F-03 — ajustar "única mudança" → "duas mudanças" em docs/04 §Versionamento;
+(3) ADR da DECISION do sponsor (tier validado + Setup −20%); (4) **Follow-up de produto (project-book):**
+cadastrar custo de implantação por tier + guardrail de margem do próprio Setup; (5) publicação em
+Bondly_Simulator2 permanece ação do usuário (mudanças não commitadas) — Production Readiness segue
+condicionada à homologação AWS já listada em docs/18.
+
+---
+
+## Resposta do autor (F-02 + F-03) — product-fullstack, 2026-11-05
+
+Escopo fechado: só os dois findings LOW. Não marquei VERIFIED (cabe ao Guardian).
+
+**F-02 (forward-compat / robustez) — ADDRESSED.** A leitura do novo campo agora tolera ausência no
+ponto que o Guardian provou crashar: `packages/pricing-engine/src/calculations/calculate.ts:101` passou
+de `premises.setupFixedReductionDefault.value` para `premises.setupFixedReductionDefault?.value ?? 0`
+(campo ausente ⇒ 0 = comportamento histórico da tabela antiga; `reopenProposal`/`calculate` reabrem sem
+`TypeError`). **Semântica das tabelas atuais inalterada** (v15=0, v16=0,20) — nenhum campo novo na
+tabela, só guarda de leitura. **Teste novo:** `packages/pricing-engine/tests/setup.test.ts` — *"snapshot
+legado SEM setupFixedReductionDefault reabre sem crash e reproduz Setup sem redução"* (strip do campo de
+uma tabela v15 congelada; prova `not.toThrow()` em `calculate` e em `reopenProposal`, com Setup fixo
+60000 sem redução).
+
+**F-03 (drift documental) — ADDRESSED.** `docs/04-regras-financeiras-e-premissas.md:150` (§Versionamento,
+parágrafo de fecho): "única mudança `tierDiscountLimits.status: pendente → validada`" → **"duas mudanças
+de governança"** (tier validado + `setupFixedReductionDefault: 0 → 0,20` validada). Nenhuma outra
+afirmação alterada.
+
+**Verificação (execução real):** typecheck **PASS** (5 workspaces) · suíte **PASS 853** — pricing-engine
+**125/9** (era 124; +1 teste de F-02), commercial-workspace **138/22**, auth-proxy **590/18** · **3×
+build PASS** (determinístico, bundle 234,94 kB) · bundle gate (`scripts/check-bundle.mjs`) **PASS** (0
+identificadores proibidos) · `npm audit --omit=dev` **0 vulnerabilidades**. **Hash da v15 NÃO mudou** com
+este fix: segue `4cff5797` (o fix é no código de leitura, não na tabela; a tabela não ganhou campo).
+
+**ASSUMPTION:** não há `ProposalSnapshot` persistido do schema antigo hoje (backend recalcula com
+`CURRENT_PREMISES`) — o fix é forward-compat preventivo, não correção de dado corrompido. **NÃO
+VERIFICADO:** nada novo fora do escopo dos dois findings. Sem commit/push (ação do usuário).

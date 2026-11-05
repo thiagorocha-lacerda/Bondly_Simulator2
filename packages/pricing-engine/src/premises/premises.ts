@@ -86,6 +86,13 @@ export interface PremiseTable {
   readonly minuConversionFee: Premise;
   readonly minuAccountFee: Premise;
   readonly setupMarkup: Premise;
+  /**
+   * Redução DEFAULT governada do Setup fixo (fração [0,1]) aplicada pelo motor quando a proposta não
+   * informa `negotiation.setupFixedReductionPct`. v15 = 0 (comportamento histórico congelado);
+   * v16 = 0,20 (DECISION sponsor/CTO 2026-11-05). Valores-base dos tiers permanecem inalterados e
+   * rastreáveis — a redução é um default de governança, não uma reescrita da tabela de tiers.
+   */
+  readonly setupFixedReductionDefault: Premise;
 
   // Guardrails de margem (R-018/R-019)
   readonly marginTarget: Premise;
@@ -154,6 +161,9 @@ const PREMISES_V15_BASE = {
   minuConversionFee: p(0.15, 'fração do Platform Fee (12m)'),
   minuAccountFee: p(0.05, 'fração do Platform Fee (prazo)'),
   setupMarkup: p(0.2, 'fração sobre o Setup'),
+  // Redução default do Setup fixo. v15 = 0 (congela o comportamento histórico: sem redução por
+  // padrão). A v16 sobrescreve este campo para 0,20 (DECISION do sponsor) — ver PREMISES_V16_BASE.
+  setupFixedReductionDefault: p(0, 'fração do Setup fixo'),
 
   marginTarget: p(0.7, 'fração — alvo'),
   marginFloor: p(0.6, 'fração — piso'),
@@ -255,8 +265,64 @@ export function freezePremiseTable(table: PremiseTable | Omit<PremiseTable, 'has
   return Object.freeze({ ...table, hash }) as PremiseTable;
 }
 
-/** Tabela de premissas ativa (v15), já congelada com hash. */
+/** Tabela de premissas v15, já congelada com hash. Imutável e preservada: propostas antigas
+ * continuam apontando para ESTE snapshot (status do desconto por tier = 'pendente'). */
 export const PREMISES_V15: PremiseTable = freezePremiseTable(PREMISES_V15_BASE);
 
-/** Versão corrente padrão do motor. */
-export const CURRENT_PREMISES = PREMISES_V15;
+const REF_V16 = '2026-11-05';
+
+/**
+ * Conjunto de premissas v16 — derivado da v15 com DUAS mudanças de GOVERNANÇA (nenhum valor-base de
+ * tier reescrito):
+ *   (1) `tierDiscountLimits.status` 'pendente' → 'validada'. O sponsor (CTO) ratificou a política de
+ *       desconto por tier exatamente como o motor a implementa (base elegível = Platform Fee do tier
+ *       ativo; waterfall sequencial PF → ×(1−tier) → ×(1−negociado) → ×(1−prazo); limites inclusivos
+ *       3%–7%). Valores min/max INALTERADOS (0.03/0.07).
+ *   (2) `setupFixedReductionDefault` 0 → 0,20 (status 'validada'): redução UNIFORME de 20% do Setup
+ *       fixo de todos os tiers, gravada como DEFAULT GOVERNADO. Os valores-base de `setup` na tabela
+ *       de `tiers` permanecem INALTERADOS e rastreáveis (40000/60000/100000/140000/180000) — o motor
+ *       aplica a redução como default quando a proposta não informa `setupFixedReductionPct`.
+ *       Análise de impacto: docs/19 (20% é seguro nos guardrails que o motor avalia).
+ * DECISION sponsor/CTO 2026-11-05. Demais campos financeiros idênticos à v15 (congelada SEM redução).
+ */
+const PREMISES_V16_BASE = {
+  ...PREMISES_V15_BASE,
+  version: 'v16',
+  hash: '',
+  label: 'Tabela padrão v16 — desconto por tier validado + Setup fixo −20% (sponsor)',
+  effectiveDate: REF_V16,
+  tierDiscountLimits: {
+    ...PREMISES_V15_BASE.tierDiscountLimits,
+    referenceDate: REF_V16,
+    status: 'validada' as const,
+  },
+  // DECISION sponsor/CTO 2026-11-05: Setup fixo −20% uniforme, default governado e validado na v16.
+  setupFixedReductionDefault: {
+    value: 0.2,
+    unit: 'fração do Setup fixo',
+    source: 'DECISION sponsor/CTO 2026-11-05 — redução de 20% uniforme do Setup fixo (análise docs/19)',
+    referenceDate: REF_V16,
+    status: 'validada' as const,
+  },
+} satisfies PremiseTable;
+
+/** Tabela de premissas v16, congelada com hash — versão corrente padrão. */
+export const PREMISES_V16: PremiseTable = freezePremiseTable(PREMISES_V16_BASE);
+
+/** Versão corrente padrão do motor (v16). Novas propostas usam ESTA tabela. */
+export const CURRENT_PREMISES = PREMISES_V16;
+
+/**
+ * Registro de versões de premissas acessível por `version`. Permite ao versionamento/snapshot e a
+ * `reopenProposal` resolver a tabela congelada de uma proposta histórica pela sua versão, sem
+ * quebrar contratos públicos. Cada entrada é um snapshot imutável e distinto (hashes diferentes).
+ */
+export const PREMISES_REGISTRY: Readonly<Record<string, PremiseTable>> = Object.freeze({
+  [PREMISES_V15.version]: PREMISES_V15,
+  [PREMISES_V16.version]: PREMISES_V16,
+});
+
+/** Resolve a tabela de premissas de uma versão registrada (ex.: 'v15', 'v16'); undefined se ausente. */
+export function premisesForVersion(version: string): PremiseTable | undefined {
+  return PREMISES_REGISTRY[version];
+}

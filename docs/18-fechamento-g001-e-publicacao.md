@@ -30,6 +30,7 @@ O G-001 está VERIFIED no seu escopo. NÃO liberar para produção com clientes 
 5. G-034 (renomear o campo `platformFeeTable` para endurecer o gate do CI) e G-035 (LOW).
 6. Homologação AWS: docker build/trivy, OAuth real, provas HTTP autenticadas, multi-processo SQLite.
 7. Do brief original, ainda fora do ciclo: política comercial de tiers + novos valores de Setup fixo (aprovação comercial); estados de SLA "ampliados" (falta a lista-alvo).
+8. **Setup fixo −20% (DECISION sponsor/CTO 2026-11-05): APLICADA na v16** como default governado validado (`setupFixedReductionDefault = 0,20`); valores-base dos tiers inalterados e rastreáveis. Docs/04 e docs/19 atualizados; F-01 ADDRESSED em docs/14. **Follow-up aberto (dono: project-book):** cadastrar o **custo real de implantação por tier** (equipe de onboarding/horas internas/infra de setup) + estender o motor com **guardrail de margem do próprio Setup** (`setupMargin = (setupNet − custoImplantação)/setupNet`). Hoje o motor **não calcula margem do Setup** — por isso a segurança do corte foi medida (docs/19) apenas contra os guardrails existentes (`marginStatus`/`SETUP_HOUR_BELOW_MIN_MARGIN`), não contra uma margem do Setup. Classe: mudança de escopo (premissas + motor + UI), encaminhar Data → Orchestrator → project-book.
 
 ## 5. Publicação em Bondly_Simulator2 (ação do usuário)
 As mudanças deste ciclo (G-001 + G-031 + G-032 + smoke) estão na working tree, NÃO commitadas. O que está hoje no remoto é o commit `0f987bd`, ANTERIOR à remoção do motor do bundle — esta publicação é o que leva o G-001 fechado para lá.

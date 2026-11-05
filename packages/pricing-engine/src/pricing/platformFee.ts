@@ -38,8 +38,9 @@ export interface PlatformFeeResolution {
  * serviços não recebem o desconto do tier (§3.2.5). `tierDiscount` default 0 preserva o cálculo
  * legado bit-a-bit quando não há desconto por tier (paridade §22).
  *
- * Observação (§3.2.3): a ORDEM e a cumulatividade aqui são uma política proposta — marcada como
- * pendente de aprovação comercial no premise `tierDiscountLimits` (status 'pendente') e na doc.
+ * Observação (§3.2.3): a ORDEM e a cumulatividade aqui foram RATIFICADAS pelo sponsor (CTO) em
+ * 2026-11-05 — o premise `tierDiscountLimits` passou a status 'validada' na v16 das premissas
+ * (a v15 permanece 'pendente' por snapshot imutável). A lógica de cálculo NÃO mudou.
  */
 export function resolvePlatformFee(args: {
   table: number;

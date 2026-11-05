@@ -8,7 +8,7 @@
  */
 import type { PricingInput, PricingResult } from '../contracts/types.js';
 import type { PremiseTable } from '../premises/premises.js';
-import { CURRENT_PREMISES, hashPremiseTable } from '../premises/premises.js';
+import { CURRENT_PREMISES, hashPremiseTable, premisesForVersion } from '../premises/premises.js';
 import { ENGINE_VERSION } from '../version.js';
 import { calculate } from '../calculations/calculate.js';
 import { runB2c, type B2cInput, type B2cResult } from '../modules/b2c.js';
@@ -85,14 +85,19 @@ export function reopenProposal(snapshot: ProposalSnapshot): {
   readonly result: PricingResult;
   readonly reproducible: boolean;
   readonly premisesIntact: boolean;
+  readonly versionRegistered: boolean;
 } {
   const result = calculate(snapshot.input, snapshot.premises);
   const premisesIntact = hashPremiseTable({ ...snapshot.premises, hash: '' }) === snapshot.premisesHash;
+  // A versão congelada na proposta deve existir no registro e bater em hash com ele (quando
+  // registrada). O recálculo usa SEMPRE o snapshot imutável — o registro é só verificação/resolução.
+  const registered = premisesForVersion(snapshot.premisesVersion);
+  const versionRegistered = registered !== undefined && registered.hash === snapshot.premisesHash;
   const reproducible =
     Math.abs(result.core - snapshot.result.core) < 1e-6 &&
     Math.abs(result.tcvClient - snapshot.result.tcvClient) < 1e-6 &&
     Math.abs(result.technicalMargin - snapshot.result.technicalMargin) < 1e-9;
-  return { result, reproducible, premisesIntact };
+  return { result, reproducible, premisesIntact, versionRegistered };
 }
 
 /**

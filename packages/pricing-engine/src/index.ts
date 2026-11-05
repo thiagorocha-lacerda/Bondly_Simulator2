@@ -12,7 +12,10 @@ export type * from './contracts/types.js';
 // Premissas (governança + versionamento)
 export {
   PREMISES_V15,
+  PREMISES_V16,
   CURRENT_PREMISES,
+  PREMISES_REGISTRY,
+  premisesForVersion,
   freezePremiseTable,
   hashPremiseTable,
 } from './premises/premises.js';

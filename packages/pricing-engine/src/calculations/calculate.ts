@@ -96,7 +96,15 @@ export function calculate(input: PricingInput, premises: PremiseTable = CURRENT_
   });
   const servicesMrr = sv.mrr;
 
-  // Setup
+  // Setup — redução do fixo: a proposta sobrescreve; na ausência, usa o DEFAULT governado da tabela
+  // de premissas ativa (v16 = 0,20 validado pelo sponsor; v15 = 0, comportamento histórico).
+  // Forward-compat (F-02): snapshots congelados sob o schema ANTIGO não têm este campo. Ausente ⇒ 0
+  // (comportamento histórico: tabela antiga = sem redução default), para reabrir sem crash.
+  const setupFixedReductionDefault = premises.setupFixedReductionDefault?.value ?? 0;
+  const reductionFromProposal = negotiation.setupFixedReductionPct !== undefined;
+  const effectiveSetupFixedReduction = reductionFromProposal
+    ? negotiation.setupFixedReductionPct!
+    : setupFixedReductionDefault;
   const setupR = computeSetup({
     tierSetup: tier.setup,
     complexity: cx,
@@ -107,7 +115,7 @@ export function calculate(input: PricingInput, premises: PremiseTable = CURRENT_
     implementationHours: complexity.implementationHours,
     hourlyRate: sv.hourPrice,
     otherAdditions: negotiation.setupOtherAdditions,
-    fixedReductionPct: negotiation.setupFixedReductionPct,
+    fixedReductionPct: effectiveSetupFixedReduction,
   });
 
   // Tributos e fees
@@ -205,10 +213,20 @@ export function calculate(input: PricingInput, premises: PremiseTable = CURRENT_
       severity: 'warn',
     });
   }
-  if (setupR.fixedReductionPct > 0) {
+  // Flag de redução do Setup fixo PENDENTE.
+  // Regra (DECISION sponsor/CTO 2026-11-05): a redução até o DEFAULT governado e validado da tabela
+  // ativa é aprovada e NÃO é pendente. A flag só sinaliza uma redução AD HOC por proposta ACIMA do
+  // default validado (concessão comercial adicional não aprovada). Em v15 o default é 0, logo
+  // QUALQUER redução volta a ser ad hoc e pendente — o comportamento legado é preservado.
+  const adHocReductionAboveDefault =
+    reductionFromProposal && setupR.fixedReductionPct > setupFixedReductionDefault + 1e-9;
+  if (adHocReductionAboveDefault) {
     warnings.push({
       code: 'SETUP_FIXED_REDUCTION_PENDING',
-      message: `Setup fixo reduzido em ${(setupR.fixedReductionPct * 100).toFixed(1)}% — valor pendente de aprovação comercial.`,
+      message:
+        `Setup fixo reduzido em ${(setupR.fixedReductionPct * 100).toFixed(1)}% — acima do default ` +
+        `validado de ${(setupFixedReductionDefault * 100).toFixed(1)}% (v${premises.version.replace(/^v/, '')}); ` +
+        `concessão ad hoc pendente de aprovação comercial.`,
       severity: 'warn',
     });
   }

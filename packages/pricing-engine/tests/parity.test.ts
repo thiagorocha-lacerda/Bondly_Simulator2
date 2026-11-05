@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculate } from '../src/index.js';
+import { calculate, PREMISES_V15 } from '../src/index.js';
 import type { PricingInput, CommercialOption, CommunicationStrategy, ContractMonths } from '../src/index.js';
 import { legacyCalc, type LegacyScenario } from './legacyReference.js';
 
@@ -122,10 +122,13 @@ function grid(): LegacyScenario[] {
 
 describe('Paridade Pricing Engine × calc() legado (§22)', () => {
   const scenarios = grid();
-  it(`reproduz ${scenarios.length} cenários com valores idênticos`, () => {
+  // Paridade bit-a-bit é contra a v15 (tabela congelada equivalente ao HTML legado). A v16 diverge
+  // DELIBERADAMENTE no Setup fixo (redução default de 20% validada pelo sponsor, DECISION 2026-11-05),
+  // portanto não é comparável ao legado — ver tests/setup.test.ts (v16 −20%) e docs/19.
+  it(`reproduz ${scenarios.length} cenários com valores idênticos (vs. v15 congelada)`, () => {
     for (const s of scenarios) {
       const legacy = legacyCalc(s);
-      const r = calculate(toInput(s));
+      const r = calculate(toInput(s), PREMISES_V15);
       const ctx = JSON.stringify(s);
       const close = (a: number, b: number, tol = 1e-6) =>
         expect(Math.abs(a - b), `${ctx}`).toBeLessThanOrEqual(tol);
