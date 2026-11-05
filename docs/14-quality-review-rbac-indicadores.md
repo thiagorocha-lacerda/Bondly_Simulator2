@@ -1085,11 +1085,17 @@ Typecheck 5/5 · 854 testes · 3 builds · bundle gate 0 · `npm audit --omit=de
 
 ### Findings novos
 
-**F-04 — Bundle gate não cobre tokens de ESTRUTURA DE CUSTO (`costs`/`cleverTap`/`infra`/`taxes`) — Severidade: LOW (INFO) — Status: OPEN**
+**F-04 — Bundle gate não cobre tokens de ESTRUTURA DE CUSTO (`costs`/`cleverTap`/`infra`/`taxes`) — Severidade: LOW (INFO) — Status: ADDRESSED (product-fullstack, 2026-11-05; reverificação do Guardian pendente)**
 - **Componente:** `scripts/check-bundle.mjs` (lista `FORBIDDEN`).
 - **Descrição/Evidência:** grep independente no `dist` de prod achou `cleverTap` 3× e `CleverTap` 1×. Inspecionados: (1) `costs:{cleverTap:0,...}` — SENTINELA ZERADA do `quoteAdapter.shellFrom`; (2) `const Dp={cleverTap:0,...}` — constante `ZERO_COSTS` (tudo 0); (3) label de UI `"Custo variável"/"CleverTap "` + `t.costs.cleverTap` no render interno do `ResultsDashboard`. **Nenhum é um VALOR de custo hard-coded** — os números só chegam do servidor na view `internal` (RBAC-gated); client/commercial recebem 0 por construção (`hasInternal:false`).
 - **Impacto:** nulo para confidencialidade (a fronteira é o servidor, provada pelo E2E `!LEAK`). O risco é de **regressão futura**: se alguém reintroduzisse cálculo de custo no cliente usando esses nomes de campo, o gate NÃO acusaria. Mesma categoria do `platformFeeTable` já documentada (CONFLICT A4) — colisão nome-de-campo × nome-de-tabela.
 - **Recomendação:** acrescentar ao gate um padrão que distinga VALOR de custo de LABEL/sentinela (ex.: proibir `costs:\{[^}]*[1-9]` ou os identificadores do engine que PRODUZEM custo — já cobertos por `cogs`/`calculate`). Não bloqueia; endurecimento preventivo. **Responsável:** product-fullstack.
+- **Remediação aplicada (2026-11-05, product-fullstack) — ADDRESSED, baixo risco, só o script de gate:**
+  1. **`FORBIDDEN` ampliada** com tokens de DADO de custo/premissa que só existem no engine. ANTES de adicionar cada um, grep no `dist` de prod ATUAL confirmou que a forma proibida é 0 hoje. Adicionados por `\b` (0 em qualquer forma, sem colisão): `cleverTapPerMau`, `invoiceReadCost`, `infraPerTransaction`, `processingPerTransaction`, `serviceProductiveHours`, `serviceMinMargin`, `serviceHourMinMargin`, `setupMarkup`, `discountCorridorBase`, `PREMISES_V15`, `PREMISES_V16`, `marginFloor`, `marginTarget`. Adicionados por regra de **identificador nu** (colidem com CAMPO legítimo do PricingResult/QuoteView exibido — proíbe função/alias/dado-de-tabela, permite property-key `tok:` e property-access `.tok`): `cleverTap`, `minuConversionFee`, `minuAccountFee`, `premisesHash`, `netMargin`, `technicalMargin`. **NÃO** foi listado `CleverTap` (capitalizado) — é label de produto na UI, não identificador; o camelCase `cleverTap` cobre o engine. **NÃO** foi listado `infra` cru — é substring/key legítima (4× no dist); só `infraPerTransaction`.
+  2. **Regra do `platformFeeTable` endurecida:** trocado o antigo `(?<![.\w])platformFeeTable\s*\(` (só pegava a CHAMADA; alias `const f=platformFeeTable` e bracket `obj['platformFeeTable']` via identificador escapavam) pela fábrica `bareId(t) = (?<![.\w])t(?![\w:])` — proíbe QUALQUER ocorrência NUA do identificador (cobre função, alias e referência crua), permitindo só `.platformFeeTable` e `platformFeeTable:`. Documentado no comentário do script.
+  3. **Teste unitário leve** adicionado (`apps/commercial-workspace/src/test/checkBundleGate.test.ts`, 8 casos): função/alias/cru são pegos; property-key/access são permitidos; `netMargin` nu não casa o prefixo `netMarginY1`. O script passou a exportar `FORBIDDEN`/`bareId` e a guardar a execução direta atrás de um main-guard.
+  - **Validação:** 3 builds de produção do commercial-workspace + `node scripts/check-bundle.mjs` = **0 proibidos** (lista ampliada) nos três; typecheck limpo; suíte completa verde (pricing-engine 125, commercial-workspace 148 [+8 do novo teste], auth-proxy 616); `npm audit --omit=dev` = 0. `pdf.ts`/pricing intocados; nada afrouxado.
+  - **ASSUMPTION/NÃO VERIFICADO:** a prova é contra o `dist` buildado AGORA — o gate assume que o DCE do Vite/Rollup continua elidindo o engine (já provado por `calculate`/`CURRENT_PREMISES`=0). Marcação VERIFIED é do Guardian, não deste agente.
 
 **F-05 — Vulnerabilidades DEV-ONLY no toolchain de teste (vitest/vite/esbuild/tinypool) — Severidade: MEDIUM (dev-only; NÃO shippado) — Status: OPEN (tracking PQ-029)**
 - **Evidência:** `npm audit` completo = 6 vulns (2 CRITICAL, 1 HIGH, 3 MODERATE). Todas transitam de `vitest@2.1.9`/`vite`/`esbuild`/`tinypool@1.1.1` (devDependencies). `npm ls tinypool` ⇒ `@bondly/auth-proxy → vitest@2.1.9 → tinypool@1.1.1`. **`npm audit --omit=dev` = 0** — nada atinge o runtime de produção (bundle comercial nem o server auth-proxy).
@@ -1101,7 +1107,7 @@ Typecheck 5/5 · 854 testes · 3 builds · bundle gate 0 · `npm audit --omit=de
 |---|---|---|---|---|
 | Bondly | **G-001/G-026 — RESOLVIDO** (Impacto Alto × Prob. **Muito baixa** residual ⇒ nível Baixo) | Vazamento de custo/margem ao cliente / emissão abaixo do piso sem aprovação | CWE-200/602; perda de margem por emissão indevida | Cálculo server-only + projeção por perfil + bundle gate + emissionGate em consolidar E emitir (defesa em profundidade). **Eliminado na implementação.** |
 | Bondly | **F-05 toolchain (Médio)** = Impacto Médio × Prob. Baixa | CVEs CRITICAL/HIGH em vitest/vite/tinypool (dev) | RCE no ambiente de CI/dev; não atinge produção | Bump deliberado de vitest + re-rodar suíte (PQ-029). Não shippado. |
-| Bondly | **F-04 gate de bundle (Baixo)** = Impacto Baixo × Prob. Muito baixa | Gate não cobre tokens de estrutura de custo | Regressão futura de custo no cliente passaria silenciosa | Endurecer `FORBIDDEN` com padrão de VALOR de custo. |
+| Bondly | **F-04 gate de bundle (Baixo) — ADDRESSED** = Impacto Baixo × Prob. Muito baixa | Gate não cobre tokens de estrutura de custo | Regressão futura de custo no cliente passaria silenciosa | `FORBIDDEN` ampliada (13 tokens `\b` + 6 por identificador-nu) e regra `platformFeeTable` endurecida (alias/bracket). Gate=0 em 3 builds; +teste. Reverif. Guardian pendente. |
 
 **Dependências de política (NÃO inventadas):** PQ-029 (gestão de vulnerabilidades) rege o tratamento de F-05 — conteúdo não está em mãos, sinalizado como dependência. PL-026 (log/privacidade) — o E2E prova log sem valores de preço (✔ alinhado ao princípio, política completa pendente). ADR: a decisão "PDF por QuoteView, sem engine, fronteira estrutural" É uma decisão arquitetural com mitigação de risco (§9.1.1/§9.2.2) — **registrar como ADR no Notion** (hoje vive só em docs/15; Finding de governança já aberto em rodadas anteriores, mantido).
 
@@ -1441,3 +1447,42 @@ Revalidação por EXECUÇÃO do fluxo de reabertura pós-emissão (ADR [doc 22](
 - **Recommended Actions:** (1) G-034 — cópia defensiva/teste de identidade na memória; (2) G-035 — confirmar PL-026 sobre e-mail em `audit`; (3) PQ-029 — bump do toolchain Vitest/Vite (dev-only) em tarefa separada; (4) validação visual da UI antes do PRR.
 
 **G-025: pode ser marcado VERIFIED / FECHADO.** Os 4 critérios de aceite do ADR doc 22 estão satisfeitos e provados por execução independente e adversarial. Isto NÃO altera o RELEASE STATUS global de produção, que permanece gated pelos findings G-001 A/B/C (HIGH) já registrados acima — G-025 é ortogonal a eles.
+
+---
+
+## Reverificação F-04 — Guardian (2026-11-05)
+
+Reverificação FOCADA do fix do F-04 (ampliação de `FORBIDDEN` + regra de identificador-nu `bareId` em `scripts/check-bundle.mjs` + teste unitário `apps/commercial-workspace/src/test/checkBundleGate.test.ts`). O autor (product-fullstack, subagente 39918b71186851ab) relatou ADDRESSED; **revalidei por EXECUÇÃO e leitura independentes — NÃO confiei no autorrelato**. Autor ≠ revisor respeitado (PL-025 §8.3/§9.2.4): o fix foi escrito pelo fullstack; a marcação VERIFIED é minha.
+
+**QUALITY STATUS: APPROVED** — **F-04 pode ser FECHADO (VERIFIED).**
+
+### Evidence (execução própria)
+- **Escopo do diff (git status):** apenas 3 artefatos — `M scripts/check-bundle.mjs`, `M docs/14-...md`, `?? .../checkBundleGate.test.ts`. **`pdf.ts`/pricing/engine INTOCADOS** (confirmado; nada afrouxado). Branch `main`, não commitado (conforme instrução — sem commit/push/AWS).
+- **Gate em 3 builds de produção** (engine buildado antes; gotcha dist-do-engine respeitado): build #1/#2/#3 do commercial-workspace → `node scripts/check-bundle.mjs` = **`OK: 1 asset, 0 proibidos`** nos três. Builds determinísticos (mesmo hash `index-DWvBiyEO.js`).
+- **Prova de ausência do engine (DCE):** grep independente no dist → `calculate`=0, `CURRENT_PREMISES`=0, `platformFeeBands`=0, `tierFor`=0, `cogs`=0. O motor é provadamente elidido do bundle do cliente.
+- **13 tokens novos por `\b` = 0 em QUALQUER forma** no dist (cleverTapPerMau, invoiceReadCost, infraPerTransaction, processingPerTransaction, serviceProductiveHours, serviceMinMargin, serviceHourMinMargin, setupMarkup, discountCorridorBase, PREMISES_V15, PREMISES_V16, marginFloor, marginTarget). Engine-only, sem colisão — adição segura confirmada.
+- **6 tokens por `bareId` — inspeção de CADA ocorrência no dist:** cleverTap 3×, minuConversionFee 2×, minuAccountFee 2×, premisesHash 5×, netMargin 6×, technicalMargin 4×, platformFeeTable 3×. **TODAS são forma permitida** (property-key `tok:0` / property-access `.tok` / prefixo `netMarginY1`/`netMarginSteady`). **Zero forma NUA/leak** (`=tok`, `tok(`, `,tok,`, alias) em qualquer asset. Por isso o gate dá 0 proibidos corretamente.
+- **Probe adversarial próprio dos regex (14 casos, além dos 8 do teste do autor):** `bareId` PEGA call `cleverTap(`, alias `const f=minuConversionFee`, ref crua `foo(cleverTap)`, `=platformFeeTable`, `,technicalMargin,`, e bracket-string `obj['platformFeeTable']`/`obj["platformFeeTable"]`; **NÃO pega** `.cleverTap`, `cleverTap:0`, `.minuConversionFee`, nem o prefixo `netMarginY1`/`netMarginSteady`/`netMarginFoo` (lookahead `[\w:]` correto). Sem falso-negativo óbvio: uma FUNÇÃO do engine ou dado-de-tabela nu SERIA pego; o campo de saída legítimo NÃO.
+- **Teste unitário do gate:** `checkBundleGate.test.ts` 8/8 (rodado de dentro de `apps/commercial-workspace` — gotcha do `vite.config.ts` do workspace pai evitado).
+- **Regressão:** typecheck limpo nos 5 workspaces; suíte completa **verde — pricing-engine 125, commercial-workspace 148 (inclui +8 do gate), auth-proxy 616** (contagens batem com o autor); `npm audit --omit=dev` = **0 vulnerabilidades** (prod-path limpo).
+
+### Findings
+- **F-04 (LOW/INFO) ADDRESSED → VERIFIED.** Endurecimento preventivo do gate validado por execução e leitura. A regra `bareId` resolve a lacuna original (colisão nome-de-campo × dado-de-tabela): proíbe função/alias/ref-nua/bracket-string, permite property-key/access. `platformFeeTable` deixou de escapar por alias/bracket.
+- Nenhum Finding novo de bloqueio. Nenhum CRITICAL/HIGH. Nenhum segredo (mudança é só gate+teste+docs).
+
+### Análise de risco (matriz Minu — PL-025 §9.1.1)
+| Projeto | Risco (nível) | Descrição | Impactos | Ações de Contorno |
+|---|---|---|---|---|
+| Bondly | **F-04 — RESOLVIDO** (Impacto Baixo × Prob. Muito baixa residual ⇒ **Baixo**) | Regressão futura de custo no cliente passar silenciosa pelo gate | Reintrodução de cálculo no client sem acusação | Gate ampliado + `bareId` (função/alias/bracket) + teste unitário; 0 proibidos em 3 builds; DCE prova engine ausente. **Mitigado.** |
+
+### NÃO VERIFICADO (honestidade)
+1. **ASSUMPTION do autor — bracket-string-literal não-alcançável:** o gate PEGA `obj['platformFeeTable']` (probei), mas a prova de ausência vale contra o dist buildado AGORA; o gate assume que o DCE do Vite/Rollup continua elidindo o engine. **Avaliação: ACEITÁVEL (sim)** — a ausência do engine é provada independentemente por `calculate`/`CURRENT_PREMISES`/`platformFeeBands`/`tierFor`/`cogs`=0; enquanto o cliente não referenciar esses símbolos-raiz, nenhum caminho reintroduz os dados de tabela, e se referenciasse o gate acusaria pela forma nua. É gate de regressão, não prova formal de inalcançabilidade.
+2. **CI real (GitHub Actions):** validei local; não observei o workflow executando o gate no CI. Recomendado confirmar o passo no pipeline antes do PRR.
+3. **F-05 (vitest/toolchain dev-only)** permanece OPEN sob PQ-029 — fora deste escopo.
+
+### Required Actions
+- Nenhuma de bloqueio. **F-04 FECHADO (VERIFIED).**
+
+### Recommended Actions
+- Commitar os 3 artefatos (gate+teste+docs) e confirmar que o passo `node scripts/check-bundle.mjs` roda no CI após o build de produção (fechar o NÃO VERIFICADO #2).
+- Manter F-05 no tracking PQ-029 (não bloqueia).
