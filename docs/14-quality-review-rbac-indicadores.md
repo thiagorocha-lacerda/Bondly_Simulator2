@@ -1362,3 +1362,82 @@ humana (não automatizável), não um defeito.
 **Governança Minu:** sem violação de PL-025 §9.2.1 (sem segredo no repo; bundle gate 0; audit prod 0). TDD/testes de
 confidencialidade presentes e não afrouxados (§13). Autor≠revisor respeitado (autor = subagente 09ffa28cad47fec3;
 revisão independente = Guardian). Vulns dev-only seguem PQ-029 (dependência, não bloqueio).
+
+## Resposta do autor (G-025 reabertura) — product-fullstack, 2026-11-05 — **IMPLEMENTADO-PENDENTE-REVISÃO**
+
+Fecha o finding **G-025** (proposta `emitido` imutável, sem caminho de revisão) conforme o ADR [doc 22](./22-adr-reabertura-pos-emissao.md), decisão do sponsor: **reabrir cria NOVA VERSÃO; a emitida permanece imutável e preservada.** Este agente NÃO marca VERIFIED — a verificação é do Guardian.
+
+**O que foi feito**
+- **RBAC:** nova ação `proposal.reopen` — só `approver` e `admin`; `business`/`tech` ⇒ 403. Matriz atualizada (`rbac.ts`) + teste exaustivo 4 papéis × 18 ações (`rbac.test.ts`) e asserções explícitas de negação.
+- **Endpoint:** `POST /api/proposals/:id/reopen { reason }`. Só `emitido` (outro estado visível ⇒ 409 `not_issued`; rascunho ⇒ 404 por escopo G-002, não revela existência). `reason` obrigatório via `limits.ts` (normalizado; vazio/invisível ⇒ 400 `reason_required`; >500 ⇒ `text_too_long`). Guard de dono G-002 reutilizado (`visible`).
+- **Nova versão:** id próprio `BONDLY-2027-NNNNNN` (DECISION: id novo, não sufixo), estado inicial `rascunho_comercial` (DECISION), `version=1`, herda `ownerEmail` (approver **não** vira dono) e inputs comercial/técnico (cópia dos **dados**, não do snapshot). Vínculo `reopenedFrom` (nova→origem) + `supersededBy` (origem→nova).
+- **Imutabilidade preservada:** a emitida não muda status/version/commercial/technical/snapshot — só ganha o ponteiro aditivo `supersededBy`. Editar a emitida segue 409 `proposal_issued_immutable`.
+- **Auditoria append-only** na mesma transação (`reopen` na nova, `reopen.superseded` na origem, com actor/origem/destino/justificativa/timestamp); triggers de imutabilidade da tabela `audit` já cobrem.
+- **Migração ADITIVA:** `reopened_from`/`superseded_by` como colunas opcionais (NULL), `ALTER TABLE ... ADD COLUMN` idempotente (guardado por `PRAGMA table_info`). Teste abre banco de **schema anterior** (sem as colunas) e reabre com sucesso.
+- **Gates sem bypass:** a nova versão percorre G-023 (invalidação por mudança material) e G-026 (gate de margem na emissão) como qualquer proposta — testes dedicados provam ambos.
+- **UI:** `ReopenProposal.tsx` (botão "Reabrir proposta" + justificativa, visível só a approver/admin na emitida, pt-BR, sem custo/margem) + marcadores "Substituída por" / "Reaberta de" no stepper.
+
+**Validação (não é VERIFIED):** typecheck PASS · testes PASS (auth 616, UI 140, engine 125) · 3 builds PASS · bundle gate 0 proibidos · `npm audit --omit=dev` 0 vulnerabilidades · smoke E2E 27/27 · mutation sanity do guard `not_issued` (inversão ⇒ 15 testes falham).
+
+**ASSUMPTION / NÃO VERIFICADO:** persistência SQLite exercitada em teste com `node:sqlite` real (tmpdir), não contra o Disk da Render; o comportamento multi-writer continua fora de escopo (instância única, G-029). Decisões de implementação (id novo, estado `rascunho_comercial`, marcador visual) foram tomadas pelo autor conforme o ADR autoriza — não re-perguntadas ao sponsor.
+
+## Validação G-025 (reabertura pós-emissão) — product-quality-security (Guardian), 2026-11-05 — **independente e adversarial**
+
+Revalidação por EXECUÇÃO do fluxo de reabertura pós-emissão (ADR [doc 22](./22-adr-reabertura-pos-emissao.md)). Não confiei no resumo do autor — li o código, executei a suíte, rodei builds/scans e fiz mutation sanity. Mudanças NÃO commitadas; sem commit/push/AWS (ação do usuário). Somente o Guardian move `FIXED → VERIFIED`.
+
+### Evidência executada (nesta sessão, sobre o working tree atual)
+- **Typecheck:** `npm run typecheck` ⇒ PASS nos 5 workspaces (pricing-catalog/engine/types, auth-proxy, commercial-workspace).
+- **Suíte completa (contagens REAIS, com build do engine ANTES — gotcha dist resolvido):** engine **125**, UI **140**, auth-proxy **616** ⇒ **881 PASS, 0 fail** (`test:engine`/`test:ui`/`test:auth` isolados).
+- **Suíte G-025 isolada:** `reopen.test.ts` **21/21 PASS** (memória **e** SQLite real). `rbac.test.ts` **85/85** (matriz 4×18 + asserções G-025).
+- **3 builds:** `npm run build` PASS 3×; commercial-workspace `vite build` ⇒ `dist/assets/index-*.js` 237 kB (458 módulos).
+- **Bundle gate:** `node scripts/check-bundle.mjs` ⇒ **0 identificadores proibidos** (cálculo/custo/premissas/engine não vazam ao bundle comercial — confidencialidade preservada na nova superfície).
+- **npm audit `--omit=dev`:** **0 vulnerabilidades** (caminho de produção limpo).
+- **Smoke E2E:** `npm run smoke:e2e` ⇒ **27/27 PASS** (inclui G-026 gated em consolidar E emitir).
+- **Secret scan no diff G-025 (`git diff apps docs`):** **0 segredos** (sem chave/credencial/token nos arquivos tocados — PL-025 §9.2.1 OK).
+- **Mutation sanity (apliquei, confirmei quebra, REVERTI, confirmei verde de novo — `git diff` limpo sem resíduo):**
+  - Inverter o guard `status !== 'emitido'` ⇒ `status === 'emitido'` em `api.ts` ⇒ **15 testes falham**.
+  - Adicionar `proposal.reopen` ao papel `business` em `rbac.ts` ⇒ **4 testes falham** (matriz business×reopen + reopen 403). Os guards NÃO são no-ops.
+- **Escopo do diff:** só arquivos G-025 (api/domain/memory+sqlite repo/projection/rbac+rbac.test/workflow + WorkflowStepper/useProposals + novos reopen.test.ts/ReopenProposal.tsx + docs 10/14/22). **Nenhum `package.json`/lock tocado** ⇒ nenhuma dependência nova introduzida. Sem scope creep.
+
+### Status por item do brief
+| # | Item | Status | Evidência |
+|---|------|--------|-----------|
+| 1 | RBAC `proposal.reopen` só approver/admin; business/tech ⇒ 403; matriz 4×18 exaustiva e coerente com doc 10 | **VERIFIED** | `rbac.ts` MATRIX (business/tech NÃO têm a ação; deny-by-default em `can()`); `rbac.test.ts` loop 4×18 contra tabela EXPECTED independente + teste G-025 dedicado; doc 10 l.194 `✔/✔/—/—`. 403 também provado por HTTP em `reopen.test.ts` ("403: business e tech"). |
+| 2 | Pré-condição: só `emitido`; outro estado visível ⇒ 409 `not_issued`; rascunho ⇒ 404 (G-002); sem justificativa ⇒ 400 | **VERIFIED** | Handler `api.ts` (RBAC 403 → `visible()` 404 → `status!=='emitido'` 409 → `checkText(reason)` 400). Dupla defesa: repo também lança `NotIssuedError`. Teste cobre 409 (visível não-emitido), 404 (rascunho invisível ao approver), 400 (ausente/espaço/`\u200b\u2060`/>500). |
+| 3 | Imutabilidade da emitida (crítico): permanece `emitido`, conteúdo/version/snapshot inalterados, só ganha `supersededBy`; edição ⇒ 409 | **VERIFIED** | `reopenProposal` (ambos repos) faz UPDATE só de `superseded_by`+`updated_at` na origem — não toca status/version/commercial/technical/snapshot. Teste compara `before`/`after` e confirma 409 `proposal_issued_immutable` ao editar a emitida pós-reabertura. `editProposal` barra `emitido` com `IssuedImmutableError`. |
+| 4 | Nova versão: id novo, herda inputs (cópia dos dados, não do snapshot congelado), estado editável, ownerEmail do dono (não o approver), version reiniciada; vínculo bidirecional | **VERIFIED** | Nova proposta: id via `nextSequence`, `status=rascunho_comercial`, `version=1`, `ownerEmail=source.ownerEmail`, `snapshot=NULL`, `reopenedFrom=origem`; origem ganha `supersededBy=nova`. Snapshot congelado NÃO herdado (teste `snapshot toBeUndefined`). **Compartilhamento de referência (memória):** ver G-034 (INFO, benigno). |
+| 5 | Gates sem bypass: nova versão passa por G-023 e G-026 ao avançar; emitir abaixo do piso sem exceção ⇒ bloqueia | **VERIFIED** | Teste "respeita G-026": nova versão de margem baixa, esteira até consolidar ⇒ 409 `approval_required`. Teste "respeita G-023": mudança comercial material pós-aprovação ⇒ volta a `aguardando_analise_tecnica`. Reabertura não cria atalho de emissão (vira `rascunho_comercial`, não `emitido`). |
+| 6 | Auditoria append-only na mesma transação; actor pseudônimo HMAC; rollback se falhar; triggers; sem e-mail em claro | **VERIFIED (com nota)** | SQLite: `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK` envolve INSERT nova + UPDATE origem + 2 `appendAudit`. Triggers `audit_no_update/no_delete/no_replace` barram UPDATE/DELETE. HMAC/sem-e-mail: o `securityLog` pseudonimiza; a **tabela** `audit.actor_email` guarda e-mail (projeção omite a Negócios). Ver nota G-035. |
+| 7 | Migração aditiva idempotente; banco de schema anterior sobe, migra e reabre | **VERIFIED** | `ALTER TABLE ADD COLUMN` guardado por `PRAGMA table_info` (idempotente). Teste cria tabela SEM `reopened_from`/`superseded_by` via `node:sqlite` real, abre pelo repo atual e reabre ⇒ 201 com vínculos. |
+| 8 | Confidencialidade: campos de vínculo não vazam custo/margem; nova versão respeita G-002 e projeção por perfil | **VERIFIED** | `projection.ts` expõe `reopenedFrom`/`supersededBy` a todos (metadados puros); custo/margem continuam só em `internal` (see_internal). Bundle gate 0 proibidos. Nova versão passa pelo mesmo `visible()`/`canAccessProposal` (G-002). |
+| 9 | Regressão: typecheck, suíte, 3 builds, bundle gate, audit; mutation sanity | **VERIFIED** | Ver "Evidência executada". 881/881, 3 builds, bundle 0, audit prod 0, mutation quebra confirmada. |
+
+### Findings novos
+| ID | Sev | Status | Descrição / Evidência / Recomendação |
+|----|-----|--------|--------------------------------------|
+| **G-034** | **INFO/LOW** | **ACCEPTED RISK (benigno)** | **Compartilhamento de referência no repo de MEMÓRIA.** `reopenProposal` da memória faz `commercial: source.commercial` (mesma referência de objeto que a emitida). **Não é defeito:** todos os métodos do repo são copy-on-write (`proposals.set(id, {...novo})` com `commercial` novo do patch — nunca mutação in-place; grep por `.commercial.=`/`Object.assign` ⇒ 0). O repo SQLite (produção) serializa JSON ⇒ sem sharing. Risco só materializaria se alguém introduzisse mutação profunda de `commercial`/`technical`. **Recomendação:** `structuredClone`/spread defensivo na cópia da memória **ou** teste que mute a nova versão e asserte identidade da emitida intacta, para blindar contra regressão futura. Não bloqueia. |
+| **G-035** | **INFO** | **OPEN (dependência de política)** | **Pseudonimização: tabela de auditoria vs. log.** O `securityLog` (stream) pseudonimiza o actor por HMAC e não emite e-mail em claro (PL-026 OK no LOG). Já a **tabela** `audit.actor_email` persiste o e-mail do ator (necessário ao não-repúdio) — a projeção a Negócios omite a nota, mas tech/admin leem o e-mail. Coerente com o modelo existente (não é regressão do G-025). **PL-026** (classificação/retenção de e-mail como dado pessoal em trilha) não está disponível aqui ⇒ sinalizo como **dependência**, não invento conteúdo. Confirmar com o dono da PL-026 se e-mail em `audit` requer pseudonimização/retção específica. |
+
+### Dependências pré-existentes (NÃO introduzidas por G-025, NÃO bloqueiam)
+- `npm audit` COMPLETO: 6 vulnerabilidades (2 CRITICAL `tinypool`/`vitest`, 1 HIGH `vite`, 3 MODERATE `esbuild`/`vite-node`/`@vitest/mocker`) — **todas dev-only** (toolchain Vitest/Vite, `node_modules/*`, NÃO shippadas; `--omit=dev` = 0). O diff G-025 não tocou manifesto/lock ⇒ advisory alheia ao commit. Item de higiene **PQ-029** (gestão de vulnerabilidades do toolchain de teste) — recomendo bump do Vitest/Vite em tarefa separada, fora do caminho de produção. **Não gate do G-025.**
+
+### Análise de risco (matriz Minu PL-025 §9.1.1)
+| Projeto | Risco (nível) | Descrição | Impactos | Ações de contorno |
+|---------|---------------|-----------|----------|-------------------|
+| Bondly | **G-034 (Baixo)** — Impacto Baixo × Prob. Muito baixa | Mutação futura de `commercial` poderia tocar a emitida via referência compartilhada (memória) | Quebra de imutabilidade da peça emitida (hipotética, não alcançável hoje) | Cópia defensiva/teste de identidade; SQLite já imune |
+| Bondly | **G-035 (Baixo)** — Impacto Baixo × Prob. Baixa | E-mail do ator em `audit` (tabela) — classificação/retenção depende da PL-026 | Exposição de dado pessoal a tech/admin; conformidade de retenção | Confirmar PL-026; pseudonimizar/retção se exigido |
+
+### NÃO VERIFICADO (honesto)
+- **Persistência contra o Disk da Render** (multi-writer): testado com `node:sqlite` em tmpdir, não no disco gerenciado. Mitigado por instância única (G-029 / 503 `storage_busy`). Fora do escopo desta verificação.
+- **Render visual da UI de reabertura** (ReopenProposal/stepper): revisado o código (gating, a11y, estados, pt-BR), não aberto a olho no navegador. Recomendo validação visual antes do PRR (consistente com a lição de validação na tela).
+- Comportamento sob concorrência de DUAS reaberturas simultâneas da MESMA emitida: `BEGIN IMMEDIATE` serializa no SQLite e a 2ª cria outra nova versão (não corrompe a origem); não exercitei corrida real — baixo risco, instância única.
+
+### QUALITY STATUS
+**APPROVED** (G-025, isolado — reabertura pós-emissão)
+
+- **Findings:** G-034 (INFO/LOW, benigno/aceito), G-035 (INFO, dependência PL-026). Nenhum CRITICAL/HIGH introduzido pelo G-025. Dev-only audit é pré-existente e não-bloqueante.
+- **Evidence:** 881/881 testes (eng 125/UI 140/auth 616), reopen 21/21 memória+SQLite, typecheck 5/5, 3 builds, bundle gate 0, audit prod 0, E2E 27/27, secret scan 0, mutation sanity quebra confirmada (15 + 4 falhas) e revertida sem resíduo.
+- **Required Actions:** nenhuma para fechar o G-025.
+- **Recommended Actions:** (1) G-034 — cópia defensiva/teste de identidade na memória; (2) G-035 — confirmar PL-026 sobre e-mail em `audit`; (3) PQ-029 — bump do toolchain Vitest/Vite (dev-only) em tarefa separada; (4) validação visual da UI antes do PRR.
+
+**G-025: pode ser marcado VERIFIED / FECHADO.** Os 4 critérios de aceite do ADR doc 22 estão satisfeitos e provados por execução independente e adversarial. Isto NÃO altera o RELEASE STATUS global de produção, que permanece gated pelos findings G-001 A/B/C (HIGH) já registrados acima — G-025 é ortogonal a eles.

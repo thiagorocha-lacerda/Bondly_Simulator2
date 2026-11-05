@@ -41,6 +41,7 @@ export type Action =
   | 'proposal.see_internal' // custo, margem, breakdown técnico
   | 'proposal.validate_technical'
   | 'proposal.emit'
+  | 'proposal.reopen' // G-025: reabrir proposta emitida criando NOVA VERSÃO — só approver/admin
   | 'proposal.read_audit_full'
   | 'sla.manage' // pausar/retomar/concluir o relógio técnico (§6.3/§6.4)
   | 'sla.configure' // alterar prazo/calendário do SLA (§6.2 — só admin)
@@ -62,6 +63,7 @@ export const ACTIONS: readonly Action[] = [
   'proposal.see_internal',
   'proposal.validate_technical',
   'proposal.emit',
+  'proposal.reopen',
   'proposal.read_audit_full',
   'sla.manage',
   'sla.configure',
@@ -98,9 +100,10 @@ const MATRIX: Readonly<Record<Role, ReadonlySet<Action>>> = {
   ]),
   // Gestor/Aprovador: decide exceções/replanejamentos e acompanha indicadores. NÃO edita
   // dimensionamento técnico nem configuração; sem see_internal (menor privilégio — ASSUMPTION doc 10 §9).
-  approver: new Set<Action>(['proposal.read', 'approval.decide', 'approval.read_queue', 'sla.view_indicators', 'pricing.quote']),
+  approver: new Set<Action>(['proposal.read', 'proposal.reopen', 'approval.decide', 'approval.read_queue', 'sla.view_indicators', 'pricing.quote']),
   admin: new Set<Action>([
     'proposal.read',
+    'proposal.reopen', // G-025: admin também reabre proposta emitida (nova versão)
     'proposal.see_internal',
     'proposal.read_audit_full',
     'sla.manage',

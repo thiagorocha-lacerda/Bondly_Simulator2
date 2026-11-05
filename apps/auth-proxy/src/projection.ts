@@ -24,6 +24,9 @@ export interface ProposalView {
   readonly technical?: Proposal['technical'];
   readonly snapshot?: unknown;
   readonly technicalSummary?: string; // resumo não-confidencial para Negócios (§6.2)
+  // G-025: vínculo de rastreabilidade da reabertura (metadados, não custo/margem) — visível a todos os papéis.
+  readonly reopenedFrom?: string;
+  readonly supersededBy?: string;
 }
 
 /** Projeta a proposta conforme o papel. Negócios: sem technical/snapshot, só um resumo do parecer. */
@@ -36,6 +39,8 @@ export function projectProposal(p: Proposal, role: Role | undefined): ProposalVi
     commercial: p.commercial,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
+    ...(p.reopenedFrom !== undefined ? { reopenedFrom: p.reopenedFrom } : {}),
+    ...(p.supersededBy !== undefined ? { supersededBy: p.supersededBy } : {}),
   };
   if (canSeeInternal(role)) {
     return {

@@ -46,6 +46,10 @@ export interface Proposal {
   readonly technical?: TechnicalInput;
   /** Snapshot congelado na aprovação técnica (JSON do ProposalSnapshot do engine). */
   readonly snapshot?: unknown;
+  /** G-025 (reabertura): id da proposta EMITIDA de origem desta nova versão (nova → origem). Opcional/aditivo. */
+  readonly reopenedFrom?: string;
+  /** G-025 (reabertura): id da nova versão que SUBSTITUI esta proposta emitida (origem → sucessora). Opcional/aditivo. */
+  readonly supersededBy?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -185,6 +189,14 @@ export class IssuedImmutableError extends Error {
   }
 }
 
+/** G-025 (reabertura): só uma proposta `emitido` pode ser reaberta — qualquer outro estado recusa. */
+export class NotIssuedError extends Error {
+  constructor(readonly id: string) {
+    super(`proposta não está emitida: ${id}`);
+    this.name = 'NotIssuedError';
+  }
+}
+
 /** Tentativa de remover/rebaixar o último admin (evita lockout). */
 export class LastAdminError extends Error {
   constructor() {
@@ -263,6 +275,22 @@ export interface ProposalRepository {
    */
   reassignOwner(id: string, toOwner: string, actorEmail: string): Promise<{ proposal: Proposal; audit: OwnerAuditEntry }>;
   ownerAudit(proposalId: string): Promise<readonly OwnerAuditEntry[]>;
+  /**
+   * G-025 (reabertura pós-emissão): cria uma NOVA VERSÃO derivada de uma proposta `emitido`, na MESMA transação em que:
+   *  - a nova proposta recebe id próprio, estado inicial editável `rascunho_comercial`, version=1, herda `ownerEmail` e os
+   *    inputs comercial/técnico da emitida (cópia dos dados, NÃO do snapshot congelado), e `reopenedFrom` = id da emitida;
+   *  - a emitida permanece `emitido` e com conteúdo inalterado — apenas ganha `supersededBy` = id da nova versão (ponteiro
+   *    aditivo, não muda status/version/commercial/technical/snapshot);
+   *  - a auditoria append-only registra o evento `reopen` em AMBAS as propostas (actor/origem/destino/justificativa/at).
+   * Recusa: NotFoundError (inexistente/fora de escopo via requireOwner — aqui não usado pois só approver/admin alcançam),
+   * NotIssuedError (estado ≠ `emitido`).
+   */
+  reopenProposal(args: {
+    sourceId: string;
+    newId: string;
+    actor: { email: string; role: Role };
+    reason: string;
+  }): Promise<{ source: Proposal; reopened: Proposal }>;
   audit(id: string): Promise<readonly AuditEntry[]>;
   /** Grava uma entrada de auditoria SEM alterar a proposta (ex.: decisão do aprovador). Append-only. */
   appendAuditEntry(proposalId: string, entry: Omit<AuditEntry, 'id' | 'proposalId' | 'at'>): Promise<void>;

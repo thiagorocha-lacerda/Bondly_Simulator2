@@ -29,6 +29,7 @@ import {
   type Proposal,
   VersionConflictError,
   NotFoundError,
+  NotIssuedError,
   LastAdminError,
   ApprovalConflictError,
   IssuedImmutableError,
@@ -592,6 +593,34 @@ async function handleApiInner(args: {
       ...(scheduledFor !== undefined ? { scheduledFor } : {}),
     });
     return json(200, { meeting: rec });
+  }
+
+  // --- G-025: reabertura pós-emissão (approver/admin) — cria NOVA VERSÃO; a emitida permanece imutável ---
+  const mReopen = path.match(/^\/api\/proposals\/([A-Za-z0-9-]+)\/reopen$/);
+  if (mReopen && method === 'POST') {
+    if (!can(role, 'proposal.reopen')) {
+      logRbacDenied({ actor: session.email, role, method, path }); // business/tech ⇒ 403 (sem e-mail em claro)
+      return json(403, { error: 'forbidden' });
+    }
+    const id = mReopen[1]!;
+    // G-002: mesmo guard de escopo de toda rota com :id (inexistente/fora de escopo ⇒ 404 indistinguíveis).
+    const current = await visible(id);
+    if (!current) return json(404, { error: 'not_found' });
+    // Só proposta `emitido` reabre — qualquer outro estado ⇒ 409 `not_issued`.
+    if (current.status !== 'emitido') return json(409, { error: 'not_issued' });
+    const b = (body ?? {}) as { reason?: unknown };
+    const rc = checkText(b.reason, 'reason'); // limite central (500) + normalização (vazio/invisível ⇒ '')
+    if (!rc.ok) return json(400, { error: rc.error, field: rc.field });
+    if (!rc.value) return json(400, { error: 'reason_required' });
+    const seq = await repo.nextSequence();
+    const newId = formatProposalId(seq);
+    try {
+      const r = await repo.reopenProposal({ sourceId: id, newId, actor: { email: session.email, role }, reason: rc.value });
+      return json(201, { proposal: projectProposal(r.reopened, role), source: projectProposal(r.source, role) });
+    } catch (e) {
+      if (e instanceof NotIssuedError) return json(409, { error: 'not_issued' });
+      return mapRepoError(e);
+    }
   }
 
   // --- rotas com :id ---

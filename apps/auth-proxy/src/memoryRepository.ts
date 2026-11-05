@@ -24,10 +24,11 @@ import {
   IssuedImmutableError,
   VersionConflictError,
   NotFoundError,
+  NotIssuedError,
   LastAdminError,
 } from './domain.js';
 import { ownerMatches } from './scope.js';
-import { statusAfterMaterialEdit, kindsInvalidatedBy } from './workflow.js';
+import { statusAfterMaterialEdit, kindsInvalidatedBy, REOPENED_INITIAL_STATE } from './workflow.js';
 
 export function createMemoryRepository(now: () => string = () => new Date().toISOString()): ProposalRepository {
   const proposals = new Map<string, Proposal>();
@@ -153,6 +154,35 @@ export function createMemoryRepository(now: () => string = () => new Date().toIS
 
     async ownerAudit(proposalId: string): Promise<readonly OwnerAuditEntry[]> {
       return ownerLog.filter((e) => e.proposalId === proposalId);
+    },
+
+    // G-025: reabertura pós-emissão (corpo síncrono ⇒ atômico no event loop; mesmo contrato do SQLite).
+    async reopenProposal(a) {
+      const source = proposals.get(a.sourceId);
+      if (!source) throw new NotFoundError(a.sourceId);
+      if (source.status !== 'emitido') throw new NotIssuedError(a.sourceId);
+      if (proposals.has(a.newId)) throw new Error(`proposta já existe: ${a.newId}`);
+      const ts = now();
+      // Nova versão: herda dono + inputs comercial/técnico da emitida (cópia dos DADOS, não do snapshot congelado).
+      const reopened: Proposal = {
+        id: a.newId,
+        version: 1,
+        status: REOPENED_INITIAL_STATE,
+        ownerEmail: source.ownerEmail,
+        commercial: source.commercial,
+        ...(source.technical !== undefined ? { technical: source.technical } : {}),
+        reopenedFrom: source.id,
+        createdAt: ts,
+        updatedAt: ts,
+      };
+      // A emitida NÃO muda status/version/commercial/technical/snapshot — só ganha o ponteiro aditivo supersededBy.
+      const nextSource: Proposal = { ...source, supersededBy: a.newId, updatedAt: ts };
+      proposals.set(reopened.id, reopened);
+      proposals.set(nextSource.id, nextSource);
+      // Auditoria append-only em AMBAS as propostas (origem e destino), na mesma operação lógica.
+      appendAudit(reopened.id, { actorEmail: a.actor.email, role: a.actor.role, action: 'reopen', toState: REOPENED_INITIAL_STATE, note: `reaberta de ${source.id}: ${a.reason}` });
+      appendAudit(source.id, { actorEmail: a.actor.email, role: a.actor.role, action: 'reopen.superseded', note: `substituída por ${a.newId}: ${a.reason}` });
+      return { source: nextSource, reopened };
     },
 
     async audit(id: string): Promise<readonly AuditEntry[]> {

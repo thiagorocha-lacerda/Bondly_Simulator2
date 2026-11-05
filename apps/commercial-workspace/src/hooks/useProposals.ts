@@ -9,6 +9,8 @@ export interface ProposalView {
   readonly commercial: Record<string, unknown>;
   readonly technical?: Record<string, unknown>;
   readonly technicalSummary?: string;
+  readonly reopenedFrom?: string;
+  readonly supersededBy?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -20,6 +22,8 @@ export interface UseProposals {
   refresh: () => Promise<void>;
   create: (commercial: Record<string, unknown>) => Promise<ProposalView | null>;
   transition: (id: string, version: number, transition: string, note?: string) => Promise<boolean>;
+  /** G-025: reabre uma proposta emitida criando uma nova versão. Retorna o erro do servidor (ou null = ok). */
+  reopen: (id: string, reason: string) => Promise<string | null>;
 }
 
 async function getJson(url: string): Promise<unknown | null> {
@@ -94,5 +98,27 @@ export function useProposals(enabled: boolean): UseProposals {
     [refresh],
   );
 
-  return { proposals, loading, available, refresh, create, transition };
+  const reopen = useCallback(
+    async (id: string, reason: string): Promise<string | null> => {
+      try {
+        const r = await fetch(`/api/proposals/${encodeURIComponent(id)}/reopen`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ reason }),
+        });
+        const data = (await r.json().catch(() => ({}))) as { error?: string };
+        if (r.ok) {
+          await refresh();
+          return null;
+        }
+        return data.error ?? 'erro';
+      } catch {
+        return 'network';
+      }
+    },
+    [refresh],
+  );
+
+  return { proposals, loading, available, refresh, create, transition, reopen };
 }

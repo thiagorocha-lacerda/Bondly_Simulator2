@@ -31,11 +31,12 @@ import {
   IssuedImmutableError,
   VersionConflictError,
   NotFoundError,
+  NotIssuedError,
   LastAdminError,
 } from './domain.js';
 import { isRole, type Role } from './rbac.js';
 import { ownerMatches } from './scope.js';
-import { statusAfterMaterialEdit, kindsInvalidatedBy } from './workflow.js';
+import { statusAfterMaterialEdit, kindsInvalidatedBy, REOPENED_INITIAL_STATE } from './workflow.js';
 
 // Tipagem mínima do subconjunto de node:sqlite que usamos (evita depender de @types instáveis).
 interface SqliteStatement {
@@ -57,6 +58,8 @@ function rowToProposal(r: Record<string, unknown>): Proposal {
     commercial: JSON.parse(String(r.commercial ?? '{}')),
     ...(r.technical != null ? { technical: JSON.parse(String(r.technical)) } : {}),
     ...(r.snapshot != null ? { snapshot: JSON.parse(String(r.snapshot)) } : {}),
+    ...(r.reopened_from != null ? { reopenedFrom: String(r.reopened_from) } : {}),
+    ...(r.superseded_by != null ? { supersededBy: String(r.superseded_by) } : {}),
     createdAt: String(r.created_at),
     updatedAt: String(r.updated_at),
   };
@@ -301,6 +304,14 @@ export async function createSqliteRepository(
   if (!cols.some((c) => c.name === 'owner_email')) {
     db.exec(`ALTER TABLE proposals ADD COLUMN owner_email TEXT NOT NULL DEFAULT ''`);
   }
+  // G-025 (migração ADITIVA): vínculo de rastreabilidade da reabertura pós-emissão. Colunas OPCIONAIS (NULL por
+  // padrão) ⇒ bancos de schema anterior (sem elas) abrem sem erro; só são escritas ao reabrir. Idempotente.
+  if (!cols.some((c) => c.name === 'reopened_from')) {
+    db.exec(`ALTER TABLE proposals ADD COLUMN reopened_from TEXT`);
+  }
+  if (!cols.some((c) => c.name === 'superseded_by')) {
+    db.exec(`ALTER TABLE proposals ADD COLUMN superseded_by TEXT`);
+  }
 
   function appendAudit(a: Omit<AuditEntry, 'id' | 'at'>): void {
     db.prepare(
@@ -434,6 +445,35 @@ export async function createSqliteRepository(
         );
         db.exec('COMMIT');
         return { proposal: rowToProposal(db.prepare(`SELECT * FROM proposals WHERE id = ?`).get(id)!), audit: entry };
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    },
+
+    // G-025: reabertura pós-emissão — nova versão + ponteiro na emitida + auditoria, tudo em BEGIN IMMEDIATE (mesma transação).
+    async reopenProposal(a) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const src = db.prepare(`SELECT * FROM proposals WHERE id = ?`).get(a.sourceId);
+        if (!src) throw new NotFoundError(a.sourceId);
+        if (String(src.status) !== 'emitido') throw new NotIssuedError(a.sourceId);
+        if (db.prepare(`SELECT id FROM proposals WHERE id = ?`).get(a.newId)) throw new Error(`proposta já existe: ${a.newId}`);
+        const ts = now();
+        // Nova versão: herda dono + inputs comercial/técnico (cópia dos DADOS, NÃO do snapshot congelado ⇒ snapshot NULL).
+        db.prepare(
+          `INSERT INTO proposals (id, version, status, owner_email, commercial, technical, snapshot, reopened_from, superseded_by, created_at, updated_at)
+           VALUES (?, 1, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)`,
+        ).run(a.newId, REOPENED_INITIAL_STATE, String(src.owner_email ?? ''), String(src.commercial), (src.technical as string | null), a.sourceId, ts, ts);
+        // A emitida permanece `emitido`, mesma version/commercial/technical/snapshot — só ganha o ponteiro aditivo.
+        db.prepare(`UPDATE proposals SET superseded_by = ?, updated_at = ? WHERE id = ?`).run(a.newId, ts, a.sourceId);
+        appendAudit({ proposalId: a.newId, actorEmail: a.actor.email, role: a.actor.role, action: 'reopen', toState: REOPENED_INITIAL_STATE as WorkflowState, note: `reaberta de ${a.sourceId}: ${a.reason}` });
+        appendAudit({ proposalId: a.sourceId, actorEmail: a.actor.email, role: a.actor.role, action: 'reopen.superseded', note: `substituída por ${a.newId}: ${a.reason}` });
+        db.exec('COMMIT');
+        return {
+          source: rowToProposal(db.prepare(`SELECT * FROM proposals WHERE id = ?`).get(a.sourceId)!),
+          reopened: rowToProposal(db.prepare(`SELECT * FROM proposals WHERE id = ?`).get(a.newId)!),
+        };
       } catch (e) {
         db.exec('ROLLBACK');
         throw e;

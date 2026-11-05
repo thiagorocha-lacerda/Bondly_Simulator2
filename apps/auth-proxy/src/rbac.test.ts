@@ -66,8 +66,8 @@ const EXPECTED: Record<Role, readonly Action[]> = {
     'approval.request',
     'pricing.quote',
   ],
-  approver: ['proposal.read', 'approval.decide', 'approval.read_queue', 'sla.view_indicators', 'pricing.quote'],
-  admin: ['proposal.read', 'proposal.see_internal', 'proposal.read_audit_full', 'sla.manage', 'sla.configure', 'sla.view_indicators', 'admin.manage_users', 'admin.reassign_owner', 'pricing.quote'],
+  approver: ['proposal.read', 'proposal.reopen', 'approval.decide', 'approval.read_queue', 'sla.view_indicators', 'pricing.quote'],
+  admin: ['proposal.read', 'proposal.reopen', 'proposal.see_internal', 'proposal.read_audit_full', 'sla.manage', 'sla.configure', 'sla.view_indicators', 'admin.manage_users', 'admin.reassign_owner', 'pricing.quote'],
 };
 
 describe('RBAC — matriz completa 4 perfis × todas as ações', () => {
@@ -88,6 +88,13 @@ describe('RBAC — matriz completa 4 perfis × todas as ações', () => {
       });
     }
   }
+  it('G-025 proposal.reopen: só approver/admin; business/tech negados', () => {
+    expect(can('approver', 'proposal.reopen')).toBe(true);
+    expect(can('admin', 'proposal.reopen')).toBe(true);
+    expect(can('business', 'proposal.reopen')).toBe(false);
+    expect(can('tech', 'proposal.reopen')).toBe(false);
+    expect(can(undefined, 'proposal.reopen')).toBe(false);
+  });
   it('approver NÃO edita dimensionamento técnico nem configuração; business sem custo/margem', () => {
     expect(can('approver', 'proposal.edit_technical')).toBe(false);
     expect(can('approver', 'sla.configure')).toBe(false);

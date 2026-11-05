@@ -119,6 +119,14 @@ export function isMaterialChange(
 export const AWAITING_APPROVAL: WorkflowState = 'aguardando_aprovacao_gestor';
 
 /**
+ * G-025 (reabertura pós-emissão): estado inicial da NOVA VERSÃO criada ao reabrir uma proposta `emitido`.
+ * DECISÃO de implementação (ADR doc 22): `rascunho_comercial` — a nova versão recomeça a esteira do zero sob o dono
+ * de Negócios e, ao avançar, percorre normalmente a reanálise por mudança material (G-023) e o gate de margem na
+ * emissão (G-026). NÃO é uma transição de `TRANSITIONS` (a emitida de origem não muda de estado); é só o estado-semente.
+ */
+export const REOPENED_INITIAL_STATE: WorkflowState = 'rascunho_comercial';
+
+/**
  * Quem solicita cada tipo (ASSUMPTION docs/16 §2) e a mudança material que o invalida (brief §4):
  * exceção comercial ← edição comercial; replanejamento de SLA ← edição técnica; alteração de escopo ← ambas.
  */

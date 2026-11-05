@@ -6,6 +6,7 @@ import { SlaDashboard } from './SlaDashboard';
 
 import type { Role } from '../hooks/roles';
 import { RequestApproval } from './ApprovalPanels';
+import { ReopenProposal } from './ReopenProposal';
 
 /** Fases da esteira na ordem (§9) + rótulo e responsável. */
 const PHASES: readonly { state: string; label: string; owner: string }[] = [
@@ -142,6 +143,14 @@ export function WorkflowStepper(props: { role: Role; proposals: UseProposals }) 
               {p.technicalSummary && <> · {p.technicalSummary}</>}
             </div>
 
+            {/* G-025: vínculo de rastreabilidade da reabertura pós-emissão */}
+            {p.supersededBy && (
+              <div className="sub" style={{ margin: '2px 0' }}>Substituída por <b>{p.supersededBy}</b> (reaberta).</div>
+            )}
+            {p.reopenedFrom && (
+              <div className="sub" style={{ margin: '2px 0' }}>Reaberta de <b>{p.reopenedFrom}</b>.</div>
+            )}
+
             {acts.length > 0 && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
                 {acts.map((a) => (
@@ -153,6 +162,9 @@ export function WorkflowStepper(props: { role: Role; proposals: UseProposals }) 
             )}
 
             <RequestApproval proposalId={p.id} version={p.version} status={p.status} role={role} onDone={() => void proposals.refresh()} />
+
+            {/* G-025: reabrir proposta emitida (só approver/admin; cria nova versão) */}
+            <ReopenProposal proposalId={p.id} status={p.status} role={role} reopen={proposals.reopen} />
 
             {/* SLA técnico (§6): relógio + ações de P&T + reuniões */}
             <SlaCard proposalId={p.id} role={role} enabled={proposals.available} />

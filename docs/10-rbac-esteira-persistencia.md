@@ -191,6 +191,7 @@ Perfis: `business` Negócios · `tech` Projetos & Tecnologia · `approver` Gesto
 | sla.manage (pausar/retomar/concluir, reunião) | — | ✔ | — | ✔ |
 | sla.view_indicators (P75/P90, sem custo/margem) | — | ✔ | ✔ | ✔ |
 | approval.decide (exceção comercial, escopo, replanejamento) | — | — | ✔ | — |
+| **proposal.reopen** (G-025: reabre proposta `emitido` ⇒ nova versão) | — | — | ✔ | ✔ |
 | sla.configure | — | — | — | ✔ |
 | admin.manage_users (atribuições + auditoria) | — | — | — | ✔ |
 | **admin.reassign_owner** (G-002: troca o dono da proposta + auditoria) | — | — | — | ✔ |
@@ -198,7 +199,9 @@ Perfis: `business` Negócios · `tech` Projetos & Tecnologia · `approver` Gesto
 
 > **pricing.quote (G-001-A):** todos os 4 papéis cotam, mas a **visão** é projetada no servidor pela ação `proposal.see_internal`: business/approver recebem `commercial` (sinal de política, sem custo/margem); tech/admin recebem `internal`. Pedir visão acima do direito ⇒ 403 `view_forbidden`. Contrato `quote.v1` em [doc 03 §QuoteView](./03-contratos-de-dados.md). Gate de emissão G-026 (`emissionGate`) usa o mesmo `marginStatus` do engine.
 
-Matriz exaustiva (4 × 16 ações) em `apps/auth-proxy/src/rbac.test.ts`. Sem perfil atribuído: 403 `profile_required` em todas as APIs de negócio (`/api/me` segue 200 com `role:null`). Enforcement sempre no servidor.
+Matriz exaustiva (4 × 18 ações) em `apps/auth-proxy/src/rbac.test.ts`. Sem perfil atribuído: 403 `profile_required` em todas as APIs de negócio (`/api/me` segue 200 com `role:null`). Enforcement sempre no servidor.
+
+> **G-025 — reabertura pós-emissão (fluxo/estado):** `POST /api/proposals/:id/reopen { reason }` só em proposta `emitido` (outro estado visível ⇒ 409 `not_issued`; rascunho ⇒ 404 por escopo G-002), só `approver`/`admin` (`proposal.reopen`; business/tech ⇒ 403), `reason` obrigatório (limite central 500, normalizado; vazio/invisível ⇒ 400 `reason_required`). Cria uma **NOVA VERSÃO**: id próprio `BONDLY-2027-NNNNNN` (via `nextSequence`), estado inicial `rascunho_comercial`, `version=1`, herda `ownerEmail` (o approver NÃO vira dono) e os inputs comercial/técnico (cópia dos dados, **não** do snapshot), `reopenedFrom = id-origem`. A emitida permanece `emitido`, com mesma version/commercial/technical/snapshot, e ganha só `supersededBy = id-nova`. Auditoria append-only (`reopen` na nova, `reopen.superseded` na origem) na mesma transação. A nova versão percorre a esteira normalmente: reanálise por mudança material (G-023) e gate de margem na emissão (G-026) **sem bypass**. Testes em `apps/auth-proxy/src/reopen.test.ts` (memória + SQLite, migração aditiva).
 
 ### ASSUMPTIONs (reversíveis; não são requisitos aprovados)
 1. **Atribuição individual** user_email→role em tabela do repositório (SQLite `role_assignments` + in-memory), gerida SÓ por admin via `PUT /api/admin/assignments`, com auditoria append-only (`assignment_audit`: quem/quando/de/para). E-mail precisa estar em domínio autorizado (igualdade exata). Não é possível remover/rebaixar o último admin (409).
@@ -230,7 +233,7 @@ Regra única (`apps/auth-proxy/src/scope.ts`, aplicada por `visible()`/listagem 
 
 ## 11. G-006 — Gestor/Aprovador funcional (IMPLEMENTADO-PENDENTE-REVISÃO; só o Guardian marca VERIFIED)
 
-**11.1 Matriz (ações novas):** `approval.request` = business, tech · `approval.read_queue` = approver · `approval.decide` = approver (admin NÃO decide). Teste exaustivo 4 papéis × 3 ações em `approvals.test.ts`; matriz geral em `rbac.test.ts` (17 ações).
+**11.1 Matriz (ações novas):** `approval.request` = business, tech · `approval.read_queue` = approver · `approval.decide` = approver (admin NÃO decide). Teste exaustivo 4 papéis × 3 ações em `approvals.test.ts`; matriz geral em `rbac.test.ts` (18 ações, incl. G-025 `proposal.reopen`).
 
 **11.2 Estados/tabela pura (`workflow.ts`):** novo estado `aguardando_aprovacao_gestor`, alvo só de `canRequestApproval` (estados de origem: aguardando_analise_tecnica, em_analise_tecnica, ajustes_solicitados, aprovado_tecnicamente, pronto_para_emissao — **nunca rascunho**, para o aprovador jamais ler rascunho). Nenhuma transição comum parte dele. Aprovado e rejeitado voltam ao estado anterior (`resolveApprovalState`). Visível no stepper da UI.
 
