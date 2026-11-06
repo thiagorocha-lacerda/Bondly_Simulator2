@@ -1,9 +1,15 @@
 # Documentação — Bondly Commercial Platform
 
+> **[00 — Livro de Projeto](./00-livro-de-projeto.md)** — documento executivo consolidado que amarra
+> numa narrativa única tudo o que foi construído e verificado, usando os docs 01–24 como fonte de
+> verdade. Consolidação fiel (não é documento-fonte novo); estado de prontidão = o do PRR (`docs/24`,
+> veredito **GO-COM-CONDIÇÕES**). **Leia primeiro** para a visão de produto/arquitetura/go-live.
+
 Índice da documentação obrigatória (prompt §23) e operacional (§27).
 
 | Doc | Conteúdo | §23 |
 |---|---|---|
+| [**00 — Livro de Projeto**](./00-livro-de-projeto.md) | **Consolidação executiva (produto, arquitetura-alvo, precificação, segurança/LGPD, SLA, operação, governança, roadmap, riscos, go-live) + matriz de rastreabilidade** | — |
 | [01 — Auditoria do HTML original](./01-auditoria-html-original.md) | Regras extraídas, matriz de rastreabilidade, divergências | 23.5 (parcial), Relatório §24.7 |
 | [02 — Execução e deploy](./02-execucao-e-deploy.md) | Comandos, config Render, rollback, limitações | 23.14, 23.15 |
 | [03 — Contratos de dados](./03-contratos-de-dados.md) | `PricingInput`/`PricingResult` e auxiliares | 23.4 |
